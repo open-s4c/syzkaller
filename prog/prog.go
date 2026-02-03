@@ -371,6 +371,10 @@ func isDefault(arg Arg) bool {
 	return arg.Type().isDefaultArg(arg)
 }
 
+func (p *Prog) InsertBefore(c *Call, calls []*Call) {
+	p.insertBefore(c, calls)
+}
+
 func (p *Prog) insertBefore(c *Call, calls []*Call) {
 	idx := 0
 	for ; idx < len(p.Calls); idx++ {
