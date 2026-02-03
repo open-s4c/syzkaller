@@ -299,8 +299,8 @@ static bool in_execute_one = false;
 #define SYZ_EXECUTOR 1
 #include "common.h"
 
-const size_t kMaxInput = 4 << 20; // keep in sync with prog.ExecBufferSize
-const size_t kMaxCommands = 1000; // prog package knows about this constant (prog.execMaxCommands)
+const size_t kMaxInput = 4 << 25; // keep in sync with prog.ExecBufferSize
+const size_t kMaxCommands = 100000; // prog package knows about this constant (prog.execMaxCommands)
 
 const uint64 instr_eof = -1;
 const uint64 instr_copyin = -2;
