@@ -55,6 +55,30 @@ const (
 	MinimizeCallsOnly
 )
 
+func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool) (*Prog, int, map[int]bool) {
+	var processedCalls map[int]bool
+	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
+		// It's frequently the case that all subsequent calls were not necessary.
+		// Try to drop them all at once.
+		p := p0.Clone()
+		for i := len(p0.Calls) - 1; i > callIndex0; i-- {
+			p.RemoveCall(i)
+		}
+		if pred(p, callIndex0, statMinRemoveCall, "trailing calls") {
+			p0 = p
+		}
+	}
+
+	if callIndex0 != -1 {
+		p0, callIndex0, processedCalls = removeUnrelatedCallsInfo(p0, callIndex0, pred, processedCallsIn)
+	}
+
+	mAddrs := usedMemory(p0, processedCalls)
+	mAddrs, processedCalls = keepMemRelation(p0, mAddrs, processedCalls)
+
+	return p0, callIndex0, processedCalls
+}
+
 // Minimize minimizes program p into an equivalent program using the equivalence
 // predicate pred. It iteratively generates simpler programs and asks pred
 // whether it is equal to the original program or not. If it is equivalent then
