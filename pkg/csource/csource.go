@@ -27,6 +27,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/bits"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -501,11 +502,12 @@ func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool) ([]
 			// data4 := msghdr[4].(*prog.ConstArg).Val
 
 			totalLength := uint64(0)
-			for _, msg := range data3 {
+			for idx, msg := range data3 {
 				iov := msg.(*prog.GroupArg).Inner
 				msglen := iov[1].(*prog.ConstArg).Val
 				// fmt.Fprintf(os.Stderr, "msglen: %d iov: %#v\n", msglen, iov)
 				totalLength += msglen
+				fmt.Fprintf(os.Stderr, "Message %d (%s) size: %d\n", idx, call.Meta.CallName, msglen)
 			}
 
 			// fmt.Fprintf(os.Stderr, "[%d]", i)
