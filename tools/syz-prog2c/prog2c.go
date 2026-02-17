@@ -331,11 +331,7 @@ func sanitizeConnect(call *prog.Call) {
 	d1 := a1.Res.(*prog.GroupArg)
 	// struct sockaddr
 	data := d1.Inner
-	// fmt.Fprintf(os.Stderr, "Connect data len: %#v\n", len(data))
-	// fmt.Fprintf(os.Stderr, "Connect data 0: %#v\n", data[0])
-	// fmt.Fprintf(os.Stderr, "Connect data 1: %#v\n", data[1])
-	// fmt.Fprintf(os.Stderr, "Connect data 2: %#v\n", data[2])
-	// fmt.Fprintf(os.Stderr, "Connect data 3: %#v\n", data[3])
+
 	port := data[1].(*prog.ConstArg).Val
 	addr := data[2].(*prog.UnionArg).Option.(*prog.ConstArg).Val
 
