@@ -806,9 +806,13 @@ func (ctx *context) fmtCallBody(call prog.ExecCall) string {
 						PTR_OFFSET_STR = "+PTR_OFFSET"
 					}
 				case *prog.StructType:
-					PTR_OFFSET_STR = "+PTR_OFFSET"
+					if valInMMapRange(ctx, arg.Value) {
+						PTR_OFFSET_STR = "+PTR_OFFSET"
+					}
 				case *prog.UnionType:
-					PTR_OFFSET_STR = "+PTR_OFFSET"
+					if valInMMapRange(ctx, arg.Value) {
+						PTR_OFFSET_STR = "+PTR_OFFSET"
+					}
 				case *prog.ResourceType, *prog.BufferType, *prog.VmaType:
 					if valInMMapRange(ctx, arg.Value) {
 						PTR_OFFSET_STR = "+PTR_OFFSET"
@@ -818,7 +822,9 @@ func (ctx *context) fmtCallBody(call prog.ExecCall) string {
 					// PTR_OFFSET_STR = "+PTR_OFFSET"
 					// no offset
 				case prog.Ref:
-					PTR_OFFSET_STR = "+PTR_OFFSET"
+					if valInMMapRange(ctx, arg.Value) {
+						PTR_OFFSET_STR = "+PTR_OFFSET"
+					}
 					// This is only needed for pkg/compiler.
 				default:
 					panic("unknown type")
@@ -937,12 +943,11 @@ func (ctx *context) copyinVal(w *bytes.Buffer, addr, size uint64, val string, bf
 
 	strVal := val
 	if strings.HasPrefix(strVal, "0x") {
-		strVal = trimLeftChars(strVal, 2)
-		PTR_OFFSET_STR_VAL = "+PTR_OFFSET"
-	}
-	n, err := strconv.ParseUint(strVal, 16, 64)
-	if err != nil && valInMMapRange(ctx, n) {
-		PTR_OFFSET_STR_VAL = "+PTR_OFFSET"
+		strVal = strVal[2:]
+		n, err := strconv.ParseUint(strVal, 16, 64)
+		if err == nil && valInMMapRange(ctx, n) {
+			PTR_OFFSET_STR_VAL = "+PTR_OFFSET"
+		}
 	}
 
 	switch bf {
