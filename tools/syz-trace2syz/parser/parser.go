@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/google/syzkaller/pkg/log"
@@ -54,6 +55,8 @@ func ParseData(data []byte, splitThreads bool) (*TraceTree, *Trace, error) {
 			} else {
 				lastCall := lastCalls[call.Pid]
 				if lastCall == nil {
+					fmt.Fprintf(os.Stderr, "Problem line: %s\n", line)
+					fmt.Fprintf(os.Stderr, "Problem call: %#v\n", call)
 					panic("Cannot find call to resume!\n")
 				}
 				lastCall.Args = append(lastCall.Args, call.Args...)
@@ -65,7 +68,7 @@ func ParseData(data []byte, splitThreads bool) (*TraceTree, *Trace, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, nil, err
 	}
-	if len(tree.TraceMap) == 0 {
+	if splitThreads && len(tree.TraceMap) == 0 {
 		return nil, nil, nil
 	}
 	if splitThreads {

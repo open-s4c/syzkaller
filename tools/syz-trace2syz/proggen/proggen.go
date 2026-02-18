@@ -29,14 +29,18 @@ func ParseData(data []byte, target *prog.Target, splitThreads bool) ([]*prog.Pro
 	if err != nil {
 		return nil, err
 	}
-	if tree == nil {
+	if tree == nil && splitThreads {
+		return nil, nil
+	}
+
+	if trace == nil && !splitThreads {
 		return nil, nil
 	}
 	var progs []*prog.Prog
 	if splitThreads {
 		parseTree(tree, tree.RootPid, target, &progs)
 	} else {
-		progs[0] = genProg(trace, target)
+		progs = append(progs, genProg(trace, target))
 	}
 	return progs, nil
 }
