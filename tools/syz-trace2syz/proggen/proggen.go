@@ -16,16 +16,16 @@ import (
 	"github.com/google/syzkaller/tools/syz-trace2syz/parser"
 )
 
-func ParseFile(filename string, target *prog.Target) ([]*prog.Prog, error) {
+func ParseFile(filename string, target *prog.Target, splitThreads bool) ([]*prog.Prog, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("error reading file: %v", err)
 	}
-	return ParseData(data, target)
+	return ParseData(data, target, splitThreads)
 }
 
-func ParseData(data []byte, target *prog.Target) ([]*prog.Prog, error) {
-	tree, err := parser.ParseData(data)
+func ParseData(data []byte, target *prog.Target, splitThreads bool) ([]*prog.Prog, error) {
+	tree, trace, err := parser.ParseData(data, splitThreads)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,11 @@ func ParseData(data []byte, target *prog.Target) ([]*prog.Prog, error) {
 		return nil, nil
 	}
 	var progs []*prog.Prog
-	parseTree(tree, tree.RootPid, target, &progs)
+	if splitThreads {
+		parseTree(tree, tree.RootPid, target, &progs)
+	} else {
+		progs[0] = genProg(trace, target)
+	}
 	return progs, nil
 }
 

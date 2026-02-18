@@ -31,11 +31,12 @@ import (
 )
 
 var (
-	flagFile        = flag.String("file", "", "file to parse")
-	flagDir         = flag.String("dir", "", "directory to parse")
-	flagDeserialize = flag.String("deserialize", "", "(Optional) directory to store deserialized programs")
-	flagSkipCorpus = flag.Bool("nocorpus", false, "(Optional) skip generating corpus.db")
-	flagTopCalls    = flag.Int("topCalls", 2, "number of most used usyscalls to be used for file name generation")
+	flagFile         = flag.String("file", "", "file to parse")
+	flagDir          = flag.String("dir", "", "directory to parse")
+	flagDeserialize  = flag.String("deserialize", "", "(Optional) directory to store deserialized programs")
+	flagSkipCorpus   = flag.Bool("nocorpus", false, "(Optional) skip generating corpus.db")
+	flagTopCalls     = flag.Int("topCalls", 2, "number of most used usyscalls to be used for file name generation")
+	flagSplitThreads = flag.Bool("splitThreads", false, "stores one program program per thread")
 )
 
 const (
@@ -101,7 +102,7 @@ func parseTraces(target *prog.Target) []*prog.Prog {
 	log.Logf(0, "parsing %v traces", totalFiles)
 	for i, file := range names {
 		log.Logf(1, "parsing file %v/%v: %v", i+1, totalFiles, filepath.Base(names[i]))
-		progs, err := proggen.ParseFile(file, target)
+		progs, err := proggen.ParseFile(file, target, *flagSplitThreads)
 		for _, p := range progs {
 			progPrefix[p] = filepath.Base(names[i])[:5]
 		}
@@ -116,13 +117,17 @@ func parseTraces(target *prog.Target) []*prog.Prog {
 		scallHist := genSyscallHist(p)
 		topNames := stat.TopKNames(scallHist, *flagTopCalls)
 		outPrefix := progPrefix[p] + "_" + strings.Join(topNames, "_")
+		outDescr := "program"
+		if *flagSplitThreads {
+			outDescr = "thread"
+		}
 		_, ok := outPrefixesIdx[outPrefix]
 		if !ok {
 			outPrefixesIdx[outPrefix]=0
 		} else {
 			outPrefixesIdx[outPrefix]++
 		}
-		progName := filepath.Join(deserializeDir, "thread_"+outPrefix+"_"+strconv.Itoa(outPrefixesIdx[outPrefix])+".prog")
+		progName := filepath.Join(deserializeDir, outDescr+outPrefix+"_"+strconv.Itoa(outPrefixesIdx[outPrefix])+".prog")
 		if err := osutil.WriteFile(progName, p.Serialize()); err != nil {
 			log.Fatalf("failed to output file: %v", err)
 		}

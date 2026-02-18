@@ -28,8 +28,10 @@ func shouldSkip(line string) bool {
 }
 
 // ParseData parses each line of a strace file in a loop.
-func ParseData(data []byte) (*TraceTree, error) {
+func ParseData(data []byte, splitThreads bool) (*TraceTree, *Trace, error) {
 	tree := NewTraceTree()
+	trace := new(Trace)
+	lastCalls := make(map[int64](*Syscall))
 	// Creating the process tree
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(nil, 64<<20)
@@ -41,15 +43,34 @@ func ParseData(data []byte) (*TraceTree, error) {
 		log.Logf(4, "scanning call: %s", line)
 		ret, call := parseSyscall(scanner)
 		if call == nil || ret != 0 {
-			return nil, fmt.Errorf("failed to parse line: %v", line)
+			return nil, nil, fmt.Errorf("failed to parse line: %v", line)
 		}
-		tree.add(call)
+		if splitThreads {
+			tree.add(call)
+		} else {
+			if !call.Resumed {
+				trace.Calls = append(trace.Calls, call)
+				lastCalls[call.Pid] = call
+			} else {
+				lastCall := lastCalls[call.Pid]
+				if lastCall == nil {
+					panic("Cannot find call to resume!\n")
+				}
+				lastCall.Args = append(lastCall.Args, call.Args...)
+				lastCall.Paused = false
+				lastCall.Ret = call.Ret
+			}
+		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(tree.TraceMap) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return tree, nil
+	if splitThreads {
+		return tree, nil, nil
+	}
+
+	return nil, trace, nil
 }
