@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -69,7 +70,7 @@ func predTrue(*prog.Prog, int, *stat.Val, string) bool {
 	return true
 }
 
-func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn map[int]bool, cache map[*prog.Call]map[any]bool) (pOut *prog.Prog, processedCalls map[int]bool) {
+func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn map[int]bool, cache []map[any]bool) (pOut *prog.Prog, processedCalls map[int]bool) {
 	pOut, processedCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, cache)
 	return
 }
@@ -79,7 +80,7 @@ func generateAllProgs(p *prog.Prog) (pF *prog.Prog) {
 	processedCalls := map[int]bool{numCalls - 1: false}
 	outPrefixesIdx := make(map[string]int)
 	prefixLen := 2
-	cache := make(map[*prog.Call]map[any]bool)
+	cache := make([]map[any]bool, numCalls)
 	fmt.Fprintf(os.Stderr, "Number of syscalls before: %d\n", numCalls)
 	for i := numCalls - 1; i > 0; {
 		if i%1000 == 0 {

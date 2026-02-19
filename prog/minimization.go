@@ -140,7 +140,7 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 	return p0, callIndex0, processedCalls
 }
 
-func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool, cache map[*Call]map[any]bool) (*Prog, map[int]bool) {
+func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool, cache []map[any]bool) (*Prog, map[int]bool) {
 	var processedCalls map[int]bool
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
 		// It's frequently the case that all subsequent calls were not necessary.
@@ -224,7 +224,7 @@ func removeUnrelatedCallsInfo(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	return p, callIndex, processedCalls
 }
 
-func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool, cache map[*Call]map[any]bool) (*Prog, map[int]bool) {
+func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool, cache []map[any]bool) (*Prog, map[int]bool) {
 	keepCalls := relatedCallsWithCache(p0, callIndex0, cache)
 	if len(p0.Calls)-len(keepCalls) < 3 {
 		return p0, processedCallsIn
@@ -282,16 +282,16 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 	}
 }
 
-func relatedCallsWithCache(p0 *Prog, callIndex0 int, cache map[*Call]map[any]bool) map[int]bool {
+func relatedCallsWithCache(p0 *Prog, callIndex0 int, cache []map[any]bool) map[int]bool {
 	keepCalls := map[int]bool{callIndex0: true}
-	used := usesCache(p0.Calls[callIndex0], cache)
+	used := usesCache(p0.Calls[callIndex0], callIndex0, cache)
 	for {
 		n := len(used)
 		for i, call := range p0.Calls {
 			if keepCalls[i] {
 				continue
 			}
-			used1 := usesCache(call, cache)
+			used1 := usesCache(call, i, cache)
 			if intersects(used, used1) {
 				keepCalls[i] = true
 				for what := range used1 {
@@ -357,11 +357,11 @@ func keepMemRelation(p0 *Prog, mAddrs map[uint64]bool, keptCalls map[int]bool) (
 	return mAddrs,keptCalls
 }
 
-func usesCache(call *Call, cache map[*Call]map[any]bool) map[any]bool {
-	ret, ok := cache[call]
-	if !ok {
+func usesCache(call *Call, i int, cache []map[any]bool) map[any]bool {
+	ret := cache[i]
+	if ret == nil {
 		ret = uses(call)
-		cache[call] = ret
+		cache[i] = ret
 		return ret
 	}
 	return ret
