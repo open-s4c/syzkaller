@@ -70,14 +70,13 @@ func predTrue(*prog.Prog, int, *stat.Val, string) bool {
 }
 
 func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn map[int]bool) (pOut *prog.Prog, processedCalls map[int]bool) {
-	pOut, _, processedCalls = prog.RemoveUnrelatedCalls(p, callIndex0, predTrue, processedCallsIn)
+	pOut, processedCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn)
 	return
 }
 
-func generateAllProgs(p0 *prog.Prog) (pF *prog.Prog) {
-	numCalls := len(p0.Calls)
+func generateAllProgs(p *prog.Prog) (pF *prog.Prog) {
+	numCalls := len(p.Calls)
 	processedCalls := map[int]bool{numCalls - 1: false}
-	p := p0.Clone()
 	outPrefixesIdx := make(map[string]int)
 	prefixLen := 2
 
