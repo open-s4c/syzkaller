@@ -277,7 +277,7 @@ func sanitizeBindUnix(call *prog.Call, subdirs map[string](bool), unixsockets ma
 	default:
 		panic("Error detecting unix bind path argument type")
 	}
-		
+
 	sockType := d1[0].(*prog.ConstArg).Val
 	path := d1[1].(*prog.DataArg).Data()
 
