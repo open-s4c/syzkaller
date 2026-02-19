@@ -69,8 +69,8 @@ func predTrue(*prog.Prog, int, *stat.Val, string) bool {
 	return true
 }
 
-func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn map[int]bool) (pOut *prog.Prog, processedCalls map[int]bool) {
-	pOut, processedCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn)
+func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn map[int]bool, cache map[*prog.Call]map[any]bool) (pOut *prog.Prog, processedCalls map[int]bool) {
+	pOut, processedCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, cache)
 	return
 }
 
@@ -79,14 +79,14 @@ func generateAllProgs(p *prog.Prog) (pF *prog.Prog) {
 	processedCalls := map[int]bool{numCalls - 1: false}
 	outPrefixesIdx := make(map[string]int)
 	prefixLen := 2
-
+	cache := make(map[*prog.Call]map[any]bool)
 	fmt.Fprintf(os.Stderr, "Number of syscalls before: %d\n", numCalls)
 	for i := numCalls - 1; i > 0; {
 		if i%1000 == 0 {
-			fmt.Fprintf(os.Stderr, "(%d/%d) Finished.\n", i, numCalls)
+			fmt.Fprintf(os.Stderr, "(%d/%d) Finished (cache: %d entries) @ %s.\n", i, numCalls, len(cache), time.Now())
 		}
 		if !processedCalls[i] {
-			pF, processedCalls = generateMinimizedProg(p, i, processedCalls)
+			pF, processedCalls = generateMinimizedProg(p, i, processedCalls, cache)
 			if len(pF.Calls) >= *flagMinCalls {
 				fmt.Fprintf(os.Stderr, "(%d/%d) Number of syscalls after: %d\n", i, len(p.Calls), len(pF.Calls))
 				prefixLen = 2

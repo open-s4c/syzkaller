@@ -48,7 +48,6 @@ const (
 	MinimizeCallsOnly
 )
 
-
 // Minimize minimizes program p into an equivalent program using the equivalence
 // predicate pred. It iteratively generates simpler programs and asks pred
 // whether it is equal to the original program or not. If it is equivalent then
@@ -141,7 +140,7 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 	return p0, callIndex0, processedCalls
 }
 
-func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool) (*Prog, map[int]bool) {
+func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool, cache map[*Call]map[any]bool) (*Prog, map[int]bool) {
 	var processedCalls map[int]bool
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
 		// It's frequently the case that all subsequent calls were not necessary.
@@ -156,7 +155,7 @@ func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	}
 
 	if callIndex0 != -1 {
-		p0, processedCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn)
+		p0, processedCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, cache)
 	}
 
 	mAddrs := usedMemory(p0, processedCalls)
@@ -225,8 +224,8 @@ func removeUnrelatedCallsInfo(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	return p, callIndex, processedCalls
 }
 
-func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool) (*Prog, map[int]bool) {
-	keepCalls := relatedCallsWithCache(p0, callIndex0)
+func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool, cache map[*Call]map[any]bool) (*Prog, map[int]bool) {
+	keepCalls := relatedCallsWithCache(p0, callIndex0, cache)
 	if len(p0.Calls)-len(keepCalls) < 3 {
 		return p0, processedCallsIn
 	}
@@ -234,7 +233,6 @@ func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, p
 	processedCalls := mapsor(processedCallsIn, keepCalls)
 	return p, processedCalls
 }
-
 
 // removeUnrelatedCalls tries to remove all "unrelated" calls at once.
 // Unrelated calls are the calls that don't use any resources/files from
@@ -284,8 +282,7 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 	}
 }
 
-func relatedCallsWithCache(p0 *Prog, callIndex0 int) map[int]bool {
-	cache := make(map[*Call]map[any]bool)
+func relatedCallsWithCache(p0 *Prog, callIndex0 int, cache map[*Call]map[any]bool) map[int]bool {
 	keepCalls := map[int]bool{callIndex0: true}
 	used := usesCache(p0.Calls[callIndex0], cache)
 	for {
