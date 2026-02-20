@@ -11,6 +11,10 @@ func (p *Prog) Clone() *Prog {
 	return p.cloneWithMap(make(map[*ResultArg]*ResultArg))
 }
 
+func (p *Prog) CloneUpTo(maxIdx int) *Prog {
+	return p.cloneWithMapMax(make(map[*ResultArg]*ResultArg), maxIdx)
+}
+
 func (p *Prog) CloneFilter(keepCalls []bool) *Prog {
 	return p.cloneWithMapAndFilter(make(map[*ResultArg]*ResultArg), keepCalls)
 }
@@ -33,14 +37,14 @@ func (p *Prog) cloneWithMapAndFilter(newargs map[*ResultArg]*ResultArg, keepCall
 }
 
 func cloneCallsFilter(origCalls []*Call, newargs map[*ResultArg]*ResultArg, keepCalls []bool) []*Call {
-	// l := 0
+	l := 0
 	i := 0
-	// for ci := range origCalls {
-	// 	if keepCalls[ci] {
-	// 		l++
-	// 	}
-	// }
-	calls := make([]*Call, len(origCalls))
+	for ci := range origCalls {
+		if keepCalls[ci] {
+			l++
+		}
+	}
+	calls := make([]*Call, l)
 	for ci, c := range origCalls {
 		if !keepCalls[ci] {
 			continue
