@@ -238,14 +238,23 @@ func cardinality(a []bool) int {
 }
 
 func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool) {
-	// keepCalls1 := relatedCalls(p0, callIndex0) 
+	// keepCalls0 := relatedCalls(p0, callIndex0) 
 	// keepCalls0 := relatedCallsWithCache(p0, callIndex0, c)
+
+	// keepCalls := make([]bool, len(p0.Calls))
+	// for idx := range keepCalls0 {
+	// 	keepCalls[idx] = true
+	// }
+
 	keepCalls := relatedCallsWithCacheAndBloom(p0, callIndex0, c)
+
 	// fmt.Fprintf(os.Stderr, "[%d] %d / %d / %d (without cache / with cache / with bloom filter)\n", callIndex0, len(keepCalls1), len(keepCalls0), cardinality(keepCalls))
+
 	if len(p0.Calls)-cardinality(keepCalls) < 3 {
 		return p0, processedCallsIn
 	}
 	p := p0.CloneFilter(keepCalls)
+
 	// p, callIndex := p0.Clone(), callIndex0
 	// for i := len(p0.Calls) - 1; i >= 0; i-- {
 	// 	if keepCalls[i] {
@@ -419,7 +428,7 @@ func keepMemRelation(p0 *Prog, mAddrs map[uint64]bool, keptCalls map[int]bool) (
 }
 
 func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
-	bf := bloom.NewWithEstimates(1000, 0.1)
+	bf := bloom.NewWithEstimates(100, 1)
 	for what := range uses {
 		switch what := what.(type) {
 		case *ResultArg:
