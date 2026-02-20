@@ -419,7 +419,7 @@ func keepMemRelation(p0 *Prog, mAddrs map[uint64]bool, keptCalls map[int]bool) (
 }
 
 func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
-	bf := bloom.NewWithEstimates(1000, 0.01)
+	bf := bloom.NewWithEstimates(1000, 0.1)
 	for what := range uses {
 		switch what := what.(type) {
 		case *ResultArg:
