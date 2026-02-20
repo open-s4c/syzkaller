@@ -151,7 +151,7 @@ func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
 		// It's frequently the case that all subsequent calls were not necessary.
 		// Try to drop them all at once.
-		p := p0.Clone()
+		p := p0.CloneUpTo(callIndex0)
 		for i := len(p0.Calls) - 1; i > callIndex0; i-- {
 			p.RemoveCall(i)
 		}
@@ -245,18 +245,18 @@ func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, p
 	if len(p0.Calls)-cardinality(keepCalls) < 3 {
 		return p0, processedCallsIn
 	}
-	// p := p0.CloneFilter(keepCalls)
-	p, callIndex := p0.Clone(), callIndex0
-	for i := len(p0.Calls) - 1; i >= 0; i-- {
-		if keepCalls[i] {
-			// fmt.Fprintf(os.Stderr, "Keeping index %d\n", i)
-			continue
-		}
-		p.RemoveCall(i)
-		if i < callIndex {
-			callIndex--
-		}
-	}
+	p := p0.CloneFilter(keepCalls)
+	// p, callIndex := p0.Clone(), callIndex0
+	// for i := len(p0.Calls) - 1; i >= 0; i-- {
+	// 	if keepCalls[i] {
+	// 		// fmt.Fprintf(os.Stderr, "Keeping index %d\n", i)
+	// 		continue
+	// 	}
+	// 	p.RemoveCall(i)
+	// 	if i < callIndex {
+	// 		callIndex--
+	// 	}
+	// }
 	// fmt.Fprintf(os.Stderr, "[%d] %d / %d / %d (without cache / with cache / with bloom filter)\n", callIndex0, len(keepCalls1), len(keepCalls0), cardinality(keepCalls))
 
 	processedCalls := sliceor(processedCallsIn, keepCalls)
