@@ -11,11 +11,11 @@ func (p *Prog) Clone() *Prog {
 	return p.cloneWithMap(make(map[*ResultArg]*ResultArg))
 }
 
-func (p *Prog) CloneFilter(keepCalls map[int]bool) *Prog {
+func (p *Prog) CloneFilter(keepCalls []bool) *Prog {
 	return p.cloneWithMapAndFilter(make(map[*ResultArg]*ResultArg), keepCalls)
 }
 
-func (p *Prog) cloneWithMapAndFilter(newargs map[*ResultArg]*ResultArg, keepCalls map[int]bool) *Prog {
+func (p *Prog) cloneWithMapAndFilter(newargs map[*ResultArg]*ResultArg, keepCalls []bool) *Prog {
 	if p.isUnsafe {
 		// We could clone it, but since we prohibit mutation
 		// of unsafe programs, it's unclear why we would clone it.
@@ -32,15 +32,15 @@ func (p *Prog) cloneWithMapAndFilter(newargs map[*ResultArg]*ResultArg, keepCall
 	return p1
 }
 
-func cloneCallsFilter(origCalls []*Call, newargs map[*ResultArg]*ResultArg, keepCalls map[int]bool) []*Call {
-	l := 0
+func cloneCallsFilter(origCalls []*Call, newargs map[*ResultArg]*ResultArg, keepCalls []bool) []*Call {
+	// l := 0
 	i := 0
-	for ci, _ := range origCalls {
-		if keepCalls[ci] {
-			l++
-		}
-	}
-	calls := make([]*Call, l)
+	// for ci := range origCalls {
+	// 	if keepCalls[ci] {
+	// 		l++
+	// 	}
+	// }
+	calls := make([]*Call, len(origCalls))
 	for ci, c := range origCalls {
 		if !keepCalls[ci] {
 			continue

@@ -7,8 +7,8 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
-	"unsafe"
 
+	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/google/syzkaller/pkg/hash"
 	"github.com/google/syzkaller/pkg/stat"
 )
@@ -31,6 +31,12 @@ var (
 	statMinFilename = stat.New("minimize: filename",
 		"Total number of filename minimization attempts", stat.StackedGraph("minimize"))
 )
+
+
+type Cache struct {
+	Uses []map[any]bool;
+	Bfs  []*bloom.BloomFilter;
+}
 
 type MinimizeMode int
 
@@ -134,14 +140,14 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 		p0, callIndex0, processedCalls = removeUnrelatedCallsInfo(p0, callIndex0, pred, processedCallsIn)
 	}
 
-	mAddrs := usedMemory(p0, processedCalls)
-	mAddrs, processedCalls = keepMemRelation(p0, mAddrs, processedCalls)
+	// mAddrs := usedMemory(p0, processedCalls)
+	// mAddrs, processedCalls = keepMemRelation(p0, mAddrs, processedCalls)
 
 	return p0, callIndex0, processedCalls
 }
 
-func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool, cache []map[any]bool) (*Prog, map[int]bool) {
-	var processedCalls map[int]bool
+func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool) {
+	var processedCalls []bool
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
 		// It's frequently the case that all subsequent calls were not necessary.
 		// Try to drop them all at once.
@@ -155,11 +161,8 @@ func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	}
 
 	if callIndex0 != -1 {
-		p0, processedCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, cache)
+		p0, processedCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, c)
 	}
-
-	mAddrs := usedMemory(p0, processedCalls)
-	mAddrs, processedCalls = keepMemRelation(p0, mAddrs, processedCalls)
 
 	return p0, processedCalls
 }
@@ -224,13 +227,39 @@ func removeUnrelatedCallsInfo(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	return p, callIndex, processedCalls
 }
 
-func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn map[int]bool, cache []map[any]bool) (*Prog, map[int]bool) {
-	keepCalls := relatedCallsWithCache(p0, callIndex0, cache)
-	if len(p0.Calls)-len(keepCalls) < 3 {
+func cardinality(a []bool) int {
+	ret := 0
+	for _, b := range a {
+		if(b) {
+			ret++
+		}
+	}
+	return ret
+}
+
+func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool) {
+	// keepCalls1 := relatedCalls(p0, callIndex0) 
+	// keepCalls0 := relatedCallsWithCache(p0, callIndex0, c)
+	keepCalls := relatedCallsWithCacheAndBloom(p0, callIndex0, c)
+	// fmt.Fprintf(os.Stderr, "[%d] %d / %d / %d (without cache / with cache / with bloom filter)\n", callIndex0, len(keepCalls1), len(keepCalls0), cardinality(keepCalls))
+	if len(p0.Calls)-cardinality(keepCalls) < 3 {
 		return p0, processedCallsIn
 	}
-	p := p0.CloneFilter(keepCalls)
-	processedCalls := mapsor(processedCallsIn, keepCalls)
+	// p := p0.CloneFilter(keepCalls)
+	p, callIndex := p0.Clone(), callIndex0
+	for i := len(p0.Calls) - 1; i >= 0; i-- {
+		if keepCalls[i] {
+			// fmt.Fprintf(os.Stderr, "Keeping index %d\n", i)
+			continue
+		}
+		p.RemoveCall(i)
+		if i < callIndex {
+			callIndex--
+		}
+	}
+	// fmt.Fprintf(os.Stderr, "[%d] %d / %d / %d (without cache / with cache / with bloom filter)\n", callIndex0, len(keepCalls1), len(keepCalls0), cardinality(keepCalls))
+
+	processedCalls := sliceor(processedCallsIn, keepCalls)
 	return p, processedCalls
 }
 
@@ -269,7 +298,7 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 				continue
 			}
 			used1 := uses(call)
-			if intersects(used, used1) {
+			if intersects(used1, used) {
 				keepCalls[i] = true
 				for what := range used1 {
 					used[what] = true
@@ -282,20 +311,23 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 	}
 }
 
-func relatedCallsWithCache(p0 *Prog, callIndex0 int, cache []map[any]bool) map[int]bool {
+func relatedCallsWithCache(p0 *Prog, callIndex0 int, c *Cache) map[int]bool {
 	keepCalls := map[int]bool{callIndex0: true}
-	used := usesCache(p0.Calls[callIndex0], callIndex0, cache)
+	used := usesCache(p0.Calls[callIndex0], callIndex0, c)
 	for {
 		n := len(used)
 		for i, call := range p0.Calls {
 			if keepCalls[i] {
 				continue
 			}
-			used1 := usesCache(call, i, cache)
+			used1 := usesCache(call, i, c)
 			if intersects(used, used1) {
-				keepCalls[i] = true
-				for what := range used1 {
-					used[what] = true
+				used1 := usesCache(call, i, c)
+				if intersects(used, used1) {
+					keepCalls[i] = true
+					for what := range used1 {
+						used[what] = true
+					}
 				}
 			}
 		}
@@ -305,24 +337,53 @@ func relatedCallsWithCache(p0 *Prog, callIndex0 int, cache []map[any]bool) map[i
 	}
 }
 
-func usedMemory(p0 *Prog, keptCalls map[int]bool) map[uint64]bool {
-	addrs := make(map[uint64]bool) 
-	for i, call := range p0.Calls {
-		if keptCalls[i] {
-			continue
-		}
-		ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-			switch arg.Type().(type) {
-			case *PtrType:
-				a := arg.(*PointerArg)
-				addrs[a.Address] = true
+func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache) []bool {
+	keepCalls := make([]bool, len(p0.Calls))
+	keepCalls[callIndex0] = true
+	usedBF := usesBF(p0.Calls[callIndex0], callIndex0, c)
+	used := usesCache(p0.Calls[callIndex0], callIndex0, c)
+	for {
+		n := len(used)
+		for i, call := range p0.Calls {
+			if keepCalls[i] {
+				continue
 			}
-		})
+			usedBF1 := usesBF(call, i, c)
+			if intersectBFs(usedBF, usedBF1) {
+				used1 := usesCache(call, i, c)
+				if intersects(used, used1) {
+					keepCalls[i] = true
+					usedBF.Merge(usedBF1)
+					for what := range used1 {
+						used[what] = true
+					}
+				}
+			}
+		}
+		if n == len(used) {
+			return keepCalls
+		}
 	}
-	return addrs
 }
 
-func keepMemRelation(p0 *Prog, mAddrs map[uint64]bool, keptCalls map[int]bool) (map[uint64]bool,map[int]bool) {
+// func usedMemory(p0 *Prog, keptCalls map[int]bool) map[uint64]bool {
+// 	addrs := make(map[uint64]bool)
+// 	for i, call := range p0.Calls {
+// 		if keptCalls[i] {
+// 			continue
+// 		}
+// 		ForeachArg(call, func(arg Arg, _ *ArgCtx) {
+// 			switch arg.Type().(type) {
+// 			case *PtrType:
+// 				a := arg.(*PointerArg)
+// 				addrs[a.Address] = true
+// 			}
+// 		})
+// 	}
+// 	return addrs
+// }
+
+func keepMemRelation(p0 *Prog, mAddrs map[uint64]bool, keptCalls map[int]bool) (map[uint64]bool, map[int]bool) {
 	n := 0
 	for n < len(keptCalls) {
 		// print(mAddrs)
@@ -357,11 +418,37 @@ func keepMemRelation(p0 *Prog, mAddrs map[uint64]bool, keptCalls map[int]bool) (
 	return mAddrs,keptCalls
 }
 
-func usesCache(call *Call, i int, cache []map[any]bool) map[any]bool {
-	ret := cache[i]
+func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
+	bf := bloom.NewWithEstimates(1000, 0.01)
+	for what := range uses {
+		switch what := what.(type) {
+		case *ResultArg:
+			bf.Add(ptrToBA(what))
+		case string:
+			bf.AddString(what)
+		default:
+			panic(fmt.Sprintf("Unclear how to convert %#v into []byte to add it to BloomFilter.\n", what))
+		}
+	}
+	return bf
+}
+
+func usesBF(call *Call, i int, c *Cache) *bloom.BloomFilter {
+	ret := c.Bfs[i]
+	if ret == nil {
+		uses := usesCache(call, i, c)
+		bf := usesToNewBloom(uses)
+		c.Bfs[i] = bf
+		ret = bf
+	}
+	return ret
+}
+
+func usesCache(call *Call, i int, c *Cache) map[any]bool {
+	ret := c.Uses[i]
 	if ret == nil {
 		ret = uses(call)
-		cache[i] = ret
+		c.Uses[i] = ret
 		return ret
 	}
 	return ret
@@ -369,7 +456,31 @@ func usesCache(call *Call, i int, cache []map[any]bool) map[any]bool {
 
 
 func ptrToBA[T any](p *T) []byte {
-	return *(*[]byte)(unsafe.Pointer(p))
+	return []byte(fmt.Sprintf("%p", p))
+}
+
+func usesBA(call *Call) [][]byte {
+	used := make([][]byte, 0)
+	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
+		switch typ := arg.Type().(type) {
+		case *ResourceType:
+			a := arg.(*ResultArg)
+			used = append(used, ptrToBA(a))
+			if a.Res != nil {
+				used = append(used, ptrToBA(a.Res))
+			}
+			for use := range a.uses {
+				used = append(used, ptrToBA(use))
+			}
+		case *BufferType:
+			a := arg.(*DataArg)
+			if a.Dir() != DirOut && typ.Kind == BufferFilename {
+				val := string(bytes.TrimRight(a.Data(), "\x00"))
+				used = append(used, []byte(val))
+			}
+		}
+	})
+	return used
 }
 
 func uses(call *Call) map[any]bool {
@@ -403,6 +514,45 @@ func intersects(list, list1 map[any]bool) bool {
 		}
 	}
 	return false
+}
+
+func intersectBFs(bf1 *bloom.BloomFilter, bf2 *bloom.BloomFilter) bool {
+	// if bf1 == nil {
+	// 	panic("Intersect on bf1=nil\n")
+	// }
+	// if bf2 == nil {
+	// 	panic("Intersect on bf2=nil\n")
+	// }
+	if bf1.BitSet().IntersectionCardinality(bf2.BitSet()) > 0 {
+		return true
+	}
+	return false
+}
+
+// func testsBlooms(list [][]byte, bf *bloom.BloomFilter) bool {
+// 	for _,what := range list {
+// 		if bf.Test(what) {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }
+
+func sliceor(list []bool, list1 []bool) []bool {
+	if (len(list) > len(list1)) {
+		for what := range list1 {
+			if list1[what] {
+				list[what] = true
+			}
+		}
+		return list
+	}
+	for what := range list {
+		if list[what] {
+			list1[what] = true
+		}
+	}
+	return list1
 }
 
 func mapsor(list map[int]bool, list1 map[int]bool) map[int]bool {

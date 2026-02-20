@@ -7,13 +7,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/stat"
@@ -70,24 +71,27 @@ func predTrue(*prog.Prog, int, *stat.Val, string) bool {
 	return true
 }
 
-func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn map[int]bool, cache []map[any]bool) (pOut *prog.Prog, processedCalls map[int]bool) {
-	pOut, processedCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, cache)
+func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn []bool, c *prog.Cache) (pOut *prog.Prog, processedCalls []bool) {
+	pOut, processedCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, c)
 	return
 }
 
 func generateAllProgs(p *prog.Prog) (pF *prog.Prog) {
 	numCalls := len(p.Calls)
-	processedCalls := map[int]bool{numCalls - 1: false}
+	processedCalls := make([]bool, numCalls)
+	processedCalls[numCalls - 1] = false
 	outPrefixesIdx := make(map[string]int)
 	prefixLen := 2
-	cache := make([]map[any]bool, numCalls)
+	c := new(prog.Cache)
+	c.Uses = make([]map[any]bool, numCalls)
+	c.Bfs = make([]*bloom.BloomFilter, numCalls)
 	fmt.Fprintf(os.Stderr, "Number of syscalls before: %d\n", numCalls)
 	for i := numCalls - 1; i > 0; {
 		if i%1000 == 0 {
-			fmt.Fprintf(os.Stderr, "(%d/%d) Finished (cache: %d entries) @ %s.\n", i, numCalls, len(cache), time.Now())
+			fmt.Fprintf(os.Stderr, "(%d/%d) Finished (cache: %d entries) @ %s.\n", i, numCalls, len(c.Uses), time.Now())
 		}
 		if !processedCalls[i] {
-			pF, processedCalls = generateMinimizedProg(p, i, processedCalls, cache)
+			pF, processedCalls = generateMinimizedProg(p, i, processedCalls, c)
 			if len(pF.Calls) >= *flagMinCalls {
 				fmt.Fprintf(os.Stderr, "(%d/%d) Number of syscalls after: %d\n", i, len(p.Calls), len(pF.Calls))
 				prefixLen = 2
