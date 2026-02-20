@@ -269,54 +269,25 @@ func removeUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred) (*Prog, i
 
 func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 	keepCalls := map[int]bool{callIndex0: true}
-	used := usesBloom(p0.Calls[callIndex0])
+	used := uses(p0.Calls[callIndex0])
 	for {
-		// n := len(used)
-		n := used.ApproximatedSize()
+		n := len(used)
 		for i, call := range p0.Calls {
 			if keepCalls[i] {
 				continue
 			}
-			used1 := usesBA(call)
-			if testsBlooms(used1, used) {
+			used1 := uses(call)
+			if intersects(used1, used) {
 				keepCalls[i] = true
-				for _, what := range used1 {
-					used.Add(what)
+				for what := range used1 {
+					used[what] = true
 				}
 			}
 		}
-		if n == used.ApproximatedSize() {
+		if n == len(used) {
 			return keepCalls
 		}
 	}
-}
-
-func checkAllowedCalls(call *Call) bool {
-	allowed := []string{"bind",
-		"connect",
-		"dup",
-		"dup3",
-		"epoll_create1",
-		"epoll_pwait",
-		"eventfd2",
-		"fallocate",
-		"fcntl",
-		"ioctl",
-		"listen",
-		"lseek",
-		"pipe2",
-		"ppoll",
-		"setsockopt",
-		"socket",
-		"umask",
-		"uname",
-	}
-	for _, allowedName := range allowed {
-		if call.Meta.CallName == allowedName {
-			return true
-		}
-	}
-	return false
 }
 
 func relatedCallsFullProgram(p0 *Prog, callIndex0 int, c *Cache, processedCallsIn []bool) ([]bool, []bool) {
@@ -509,30 +480,6 @@ func usesRet(call *Call) map[any]bool {
 	return used
 }
 
-func uses(call *Call) map[any]bool {
-	used := make(map[any]bool)
-	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-		switch typ := arg.Type().(type) {
-		case *ResourceType:
-			a := arg.(*ResultArg)
-			used[a] = true
-			if a.Res != nil {
-				used[a.Res] = true
-			}
-			for use := range a.uses {
-				used[use] = true
-			}
-		case *BufferType:
-			a := arg.(*DataArg)
-			if a.Dir() != DirOut && typ.Kind == BufferFilename {
-				val := string(bytes.TrimRight(a.Data(), "\x00"))
-				used[val] = true
-			}
-		}
-	})
-	return used
-}
-
 func usesBloom(call *Call) *bloom.BloomFilter {
 	// used := make(map[any]bool)
 	used := bloom.NewWithEstimates(10, 0.01)
@@ -620,29 +567,29 @@ func usesBA(call *Call) [][]byte {
 	return used
 }
 
-// func uses(call *Call) map[any]bool {
-// 	used := make(map[any]bool)
-// 	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-// 		switch typ := arg.Type().(type) {
-// 		case *ResourceType:
-// 			a := arg.(*ResultArg)
-// 			used[a] = true
-// 			if a.Res != nil {
-// 				used[a.Res] = true
-// 			}
-// 			for use := range a.uses {
-// 				used[use] = true
-// 			}
-// 		case *BufferType:
-// 			a := arg.(*DataArg)
-// 			if a.Dir() != DirOut && typ.Kind == BufferFilename {
-// 				val := string(bytes.TrimRight(a.Data(), "\x00"))
-// 				used[val] = true
-// 			}
-// 		}
-// 	})
-// 	return used
-// }
+func uses(call *Call) map[any]bool {
+	used := make(map[any]bool)
+	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
+		switch typ := arg.Type().(type) {
+		case *ResourceType:
+			a := arg.(*ResultArg)
+			used[a] = true
+			if a.Res != nil {
+				used[a.Res] = true
+			}
+			for use := range a.uses {
+				used[use] = true
+			}
+		case *BufferType:
+			a := arg.(*DataArg)
+			if a.Dir() != DirOut && typ.Kind == BufferFilename {
+				val := string(bytes.TrimRight(a.Data(), "\x00"))
+				used[val] = true
+			}
+		}
+	})
+	return used
+}
 
 func intersects(list, list1 map[any]bool) bool {
 	for what := range list1 {
