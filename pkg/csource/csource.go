@@ -581,16 +581,16 @@ func (ctx *context) fmtCallBody(call prog.ExecCall) string {
 			if i == 1 {
 				switch callName {
 				case "write":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->sendBuffer)")
+					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->writeBuffer)")
 					continue
 				case "pwrite64":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->sendBuffer)")
+					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->writeBuffer)")
 					continue
 				case "send":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->sendBuffer)")
+					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->writeBuffer)")
 					continue
 				case "sendto":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->sendBuffer)")
+					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->writeBuffer)")
 					continue
 				}
 			}
