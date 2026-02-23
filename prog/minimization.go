@@ -235,7 +235,7 @@ func cardinality(a []bool) int {
 }
 
 func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool) {
-	keepCalls := relatedCallsWithCacheAndBloom(p0, callIndex0, c, resChanges)
+	keepCalls := relatedCallsWithCacheAndBloom(p0, callIndex0, c, resChanges, processedCallsIn)
 
 	if len(p0.Calls)-cardinality(keepCalls) < 3 {
 		return p0, processedCallsIn
@@ -294,7 +294,7 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 	}
 }
 
-func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache, resChanges []int) []bool {
+func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache, resChanges []int, processedCallsIn []bool) []bool {
 	keepCalls := make([]bool, len(p0.Calls))
 	keepCalls[callIndex0] = true
 	usedBF := usesBF(p0.Calls[callIndex0], callIndex0, c)
@@ -309,7 +309,7 @@ func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache, resChange
 		nextResChange = 0
 		nextResChangeIdx = 0
 		for i:=0; i<numCalls; i++ {
-			if keepCalls[i] {
+			if keepCalls[i] || processedCallsIn[i] {
 				continue
 			}
 
@@ -339,6 +339,17 @@ func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache, resChange
 		}
 		if n == len(used) {
 			return keepCalls
+		}
+		// // update resChanges to remove keepCalls && processedCallsIn
+		numResChanges := len(resChanges)
+		for i:= numResChanges-1; i >=0; i-- {
+			if processedCallsIn[resChanges[i]] || keepCalls[resChanges[i]] {
+				if i == numResChanges-1 {
+					resChanges = resChanges[:i]
+				} else {
+					resChanges = append(resChanges[:i], resChanges[i+1:]...)
+				}
+			}
 		}
 	}
 }
