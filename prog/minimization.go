@@ -238,35 +238,12 @@ func cardinality(a []bool) int {
 }
 
 func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool) {
-	// keepCalls0 := relatedCalls(p0, callIndex0) 
-	keepCalls0 := relatedCallsWithCache(p0, callIndex0, c)
-
-	keepCalls := make([]bool, len(p0.Calls))
-	for idx := range keepCalls0 {
-		keepCalls[idx] = true
-	}
-
-	// keepCalls := relatedCallsWithCacheAndBloom(p0, callIndex0, c, resChanges)
-
-	// fmt.Fprintf(os.Stderr, "[%d] %d / %d / %d (without cache / with cache / with bloom filter)\n", callIndex0, len(keepCalls1), len(keepCalls0), cardinality(keepCalls))
+	keepCalls := relatedCallsWithCacheAndBloom(p0, callIndex0, c, resChanges)
 
 	if len(p0.Calls)-cardinality(keepCalls) < 3 {
 		return p0, processedCallsIn
 	}
 	p := p0.CloneFilter(keepCalls)
-
-	// p, callIndex := p0.Clone(), callIndex0
-	// for i := len(p0.Calls) - 1; i >= 0; i-- {
-	// 	if keepCalls[i] {
-	// 		// fmt.Fprintf(os.Stderr, "Keeping index %d\n", i)
-	// 		continue
-	// 	}
-	// 	p.RemoveCall(i)
-	// 	if i < callIndex {
-	// 		callIndex--
-	// 	}
-	// }
-	// fmt.Fprintf(os.Stderr, "[%d] %d / %d / %d (without cache / with cache / with bloom filter)\n", callIndex0, len(keepCalls1), len(keepCalls0), cardinality(keepCalls))
 
 	processedCalls := sliceor(processedCallsIn, keepCalls)
 	return p, processedCalls
@@ -311,32 +288,6 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 				keepCalls[i] = true
 				for what := range used1 {
 					used[what] = true
-				}
-			}
-		}
-		if n == len(used) {
-			return keepCalls
-		}
-	}
-}
-
-func relatedCallsWithCache(p0 *Prog, callIndex0 int, c *Cache) map[int]bool {
-	keepCalls := map[int]bool{callIndex0: true}
-	used := usesCache(p0.Calls[callIndex0], callIndex0, c)
-	for {
-		n := len(used)
-		for i, call := range p0.Calls {
-			if keepCalls[i] {
-				continue
-			}
-			used1 := usesCache(call, i, c)
-			if intersects(used, used1) {
-				used1 := usesCache(call, i, c)
-				if intersects(used, used1) {
-					keepCalls[i] = true
-					for what := range used1 {
-						used[what] = true
-					}
 				}
 			}
 		}
@@ -436,30 +387,6 @@ func ptrToBA[T any](p *T) []byte {
 	return []byte(fmt.Sprintf("%p", p))
 }
 
-func usesBA(call *Call) [][]byte {
-	used := make([][]byte, 0)
-	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-		switch typ := arg.Type().(type) {
-		case *ResourceType:
-			a := arg.(*ResultArg)
-			used = append(used, ptrToBA(a))
-			if a.Res != nil {
-				used = append(used, ptrToBA(a.Res))
-			}
-			for use := range a.uses {
-				used = append(used, ptrToBA(use))
-			}
-		case *BufferType:
-			a := arg.(*DataArg)
-			if a.Dir() != DirOut && typ.Kind == BufferFilename {
-				val := string(bytes.TrimRight(a.Data(), "\x00"))
-				used = append(used, []byte(val))
-			}
-		}
-	})
-	return used
-}
-
 func uses(call *Call) map[any]bool {
 	used := make(map[any]bool)
 	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
@@ -494,26 +421,11 @@ func intersects(list, list1 map[any]bool) bool {
 }
 
 func intersectBFs(bf1 *bloom.BloomFilter, bf2 *bloom.BloomFilter) bool {
-	// if bf1 == nil {
-	// 	panic("Intersect on bf1=nil\n")
-	// }
-	// if bf2 == nil {
-	// 	panic("Intersect on bf2=nil\n")
-	// }
 	if bf1.BitSet().IntersectionCardinality(bf2.BitSet()) > 0 {
 		return true
 	}
 	return false
 }
-
-// func testsBlooms(list [][]byte, bf *bloom.BloomFilter) bool {
-// 	for _,what := range list {
-// 		if bf.Test(what) {
-// 			return true
-// 		}
-// 	}
-// 	return false
-// }
 
 func sliceor(list []bool, list1 []bool) []bool {
 	if (len(list) > len(list1)) {
