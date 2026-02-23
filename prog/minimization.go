@@ -140,9 +140,6 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 		p0, callIndex0, processedCalls = removeUnrelatedCallsInfo(p0, callIndex0, pred, processedCallsIn)
 	}
 
-	// mAddrs := usedMemory(p0, processedCalls)
-	// mAddrs, processedCalls = keepMemRelation(p0, mAddrs, processedCalls)
-
 	return p0, callIndex0, processedCalls
 }
 
