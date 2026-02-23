@@ -213,7 +213,6 @@ func mapsNewInRightAny(list map[any]bool, list1 map[any]bool) bool {
 func generateResChanges(p *prog.Prog) []int {
 	resSlice := make([]int, 0)
 	lastResources := make(map[any](bool))
-	// var resources []any
 	for idx, call := range p.Calls {
 		nextResources := extractResources(call)
 		newELem := mapsNewInRightAny(lastResources, nextResources)
