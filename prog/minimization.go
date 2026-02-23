@@ -146,7 +146,7 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 	return p0, callIndex0, processedCalls
 }
 
-func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool) {
+func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool) {
 	var processedCalls []bool
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
 		// It's frequently the case that all subsequent calls were not necessary.
@@ -161,7 +161,7 @@ func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	}
 
 	if callIndex0 != -1 {
-		p0, processedCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, c)
+		p0, processedCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, c, resChanges)
 	}
 
 	return p0, processedCalls
@@ -237,16 +237,16 @@ func cardinality(a []bool) int {
 	return ret
 }
 
-func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool) {
+func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool) {
 	// keepCalls0 := relatedCalls(p0, callIndex0) 
-	// keepCalls0 := relatedCallsWithCache(p0, callIndex0, c)
+	keepCalls0 := relatedCallsWithCache(p0, callIndex0, c)
 
-	// keepCalls := make([]bool, len(p0.Calls))
-	// for idx := range keepCalls0 {
-	// 	keepCalls[idx] = true
-	// }
+	keepCalls := make([]bool, len(p0.Calls))
+	for idx := range keepCalls0 {
+		keepCalls[idx] = true
+	}
 
-	keepCalls := relatedCallsWithCacheAndBloom(p0, callIndex0, c)
+	// keepCalls := relatedCallsWithCacheAndBloom(p0, callIndex0, c, resChanges)
 
 	// fmt.Fprintf(os.Stderr, "[%d] %d / %d / %d (without cache / with cache / with bloom filter)\n", callIndex0, len(keepCalls1), len(keepCalls0), cardinality(keepCalls))
 
@@ -346,26 +346,46 @@ func relatedCallsWithCache(p0 *Prog, callIndex0 int, c *Cache) map[int]bool {
 	}
 }
 
-func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache) []bool {
+func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache, resChanges []int) []bool {
 	keepCalls := make([]bool, len(p0.Calls))
 	keepCalls[callIndex0] = true
 	usedBF := usesBF(p0.Calls[callIndex0], callIndex0, c)
 	used := usesCache(p0.Calls[callIndex0], callIndex0, c)
+
+	nextResChange := 0
+	nextResChangeIdx := 0
+	numCalls := len(p0.Calls)
+
 	for {
 		n := len(used)
-		for i, call := range p0.Calls {
+		nextResChange = 0
+		nextResChangeIdx = 0
+		for i:=0; i<numCalls; i++ {
 			if keepCalls[i] {
 				continue
 			}
+
+			call := p0.Calls[i]
 			usedBF1 := usesBF(call, i, c)
 			if intersectBFs(usedBF, usedBF1) {
 				used1 := usesCache(call, i, c)
 				if intersects(used, used1) {
+					// fmt.Fprintf(os.Stderr, "Found an intersection %d\n", i)
 					keepCalls[i] = true
 					usedBF.Merge(usedBF1)
 					for what := range used1 {
 						used[what] = true
 					}
+				}
+			} else
+			{
+				// jump up to next index with new FDs
+				for len(resChanges) > nextResChangeIdx+1 && resChanges[nextResChangeIdx] <= i {
+					nextResChangeIdx++
+					nextResChange = resChanges[nextResChangeIdx]
+				}
+				if nextResChange > i {
+					i = nextResChange-1
 				}
 			}
 		}
@@ -375,60 +395,8 @@ func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache) []bool {
 	}
 }
 
-// func usedMemory(p0 *Prog, keptCalls map[int]bool) map[uint64]bool {
-// 	addrs := make(map[uint64]bool)
-// 	for i, call := range p0.Calls {
-// 		if keptCalls[i] {
-// 			continue
-// 		}
-// 		ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-// 			switch arg.Type().(type) {
-// 			case *PtrType:
-// 				a := arg.(*PointerArg)
-// 				addrs[a.Address] = true
-// 			}
-// 		})
-// 	}
-// 	return addrs
-// }
-
-func keepMemRelation(p0 *Prog, mAddrs map[uint64]bool, keptCalls map[int]bool) (map[uint64]bool, map[int]bool) {
-	n := 0
-	for n < len(keptCalls) {
-		// print(mAddrs)
-		n = len(keptCalls)
-		for i, call := range p0.Calls {
-			if keptCalls[i] {
-				continue
-			}
-			argMatch := false
-			ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-				switch arg.Type().(type) {
-				case *PtrType:
-					a := arg.(*PointerArg)
-					if mAddrs[a.Address] {
-						argMatch = true
-						break
-					}
-				}
-			})
-			if argMatch {
-				keptCalls[i] = true
-				ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-					switch arg.Type().(type) {
-					case *PtrType:
-						a := arg.(*PointerArg)
-						mAddrs[a.Address] = true
-					}
-				})
-			}
-		}
-	}
-	return mAddrs,keptCalls
-}
-
 func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
-	bf := bloom.NewWithEstimates(100, 1)
+	bf := bloom.NewWithEstimates(500, 1)
 	for what := range uses {
 		switch what := what.(type) {
 		case *ResultArg:
