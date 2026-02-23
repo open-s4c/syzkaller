@@ -45,7 +45,6 @@ var (
 	flagCSB        = flag.Bool("csb", false, "generate CSB test header instead of c file")
 	flagNumNop     = flag.Int("num_nop", 0, "number of NOPs per operation")
 	flagCFile      = flag.String("cfile", "", "output c file instead of stdout")
-	flagNumInvoc   = flag.Int("num_invoc", 10000, "max number of invocations per syscall")
 )
 
 type BMConfigApps struct {
