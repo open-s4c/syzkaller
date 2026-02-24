@@ -17,6 +17,7 @@ type Syscall struct {
 	MissingArgs int // number of trailing args that should be zero-filled
 	Args        []Field
 	Ret         Type
+	RetVal      int64
 	Attrs       SyscallAttrs
 
 	// Resources that are required for this call to be generated (in/inout).

@@ -117,6 +117,7 @@ func (ctx *context) genCall() *prog.Call {
 		syzCall.Args = append(syzCall.Args, res)
 	}
 	ctx.genResult(syzCall.Meta.Ret, straceCall.Ret)
+	syzCall.Meta.RetVal = straceCall.Ret
 	return syzCall
 }
 
