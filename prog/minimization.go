@@ -32,10 +32,9 @@ var (
 		"Total number of filename minimization attempts", stat.StackedGraph("minimize"))
 )
 
-
 type Cache struct {
-	Uses []map[any]bool;
-	Bfs  []*bloom.BloomFilter;
+	Uses []map[any]bool
+	Bfs  []*bloom.BloomFilter
 }
 
 type MinimizeMode int
@@ -227,7 +226,7 @@ func removeUnrelatedCallsInfo(p0 *Prog, callIndex0 int, pred minimizePred, proce
 func cardinality(a []bool) int {
 	ret := 0
 	for _, b := range a {
-		if(b) {
+		if b {
 			ret++
 		}
 	}
@@ -308,7 +307,7 @@ func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache, resChange
 		n := len(used)
 		nextResChange = 0
 		nextResChangeIdx = 0
-		for i:=0; i<numCalls; i++ {
+		for i := 0; i < numCalls; i++ {
 			if keepCalls[i] || processedCallsIn[i] {
 				continue
 			}
@@ -325,15 +324,14 @@ func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache, resChange
 						used[what] = true
 					}
 				}
-			} else
-			{
+			} else {
 				// jump up to next index with new FDs
 				for len(resChanges) > nextResChangeIdx+1 && resChanges[nextResChangeIdx] <= i {
 					nextResChangeIdx++
 					nextResChange = resChanges[nextResChangeIdx]
 				}
 				if nextResChange > i {
-					i = nextResChange-1
+					i = nextResChange - 1
 				}
 			}
 		}
@@ -342,7 +340,7 @@ func relatedCallsWithCacheAndBloom(p0 *Prog, callIndex0 int, c *Cache, resChange
 		}
 		// // update resChanges to remove keepCalls && processedCallsIn
 		numResChanges := len(resChanges)
-		for i:= numResChanges-1; i >=0; i-- {
+		for i := numResChanges - 1; i >= 0; i-- {
 			if processedCallsIn[resChanges[i]] || keepCalls[resChanges[i]] {
 				if i == numResChanges-1 {
 					resChanges = resChanges[:i]
@@ -390,7 +388,6 @@ func usesCache(call *Call, i int, c *Cache) map[any]bool {
 	return ret
 }
 
-
 func ptrToBA[T any](p *T) []byte {
 	return []byte(fmt.Sprintf("%p", p))
 }
@@ -436,7 +433,7 @@ func intersectBFs(bf1 *bloom.BloomFilter, bf2 *bloom.BloomFilter) bool {
 }
 
 func sliceor(list []bool, list1 []bool) []bool {
-	if (len(list) > len(list1)) {
+	if len(list) > len(list1) {
 		for what := range list1 {
 			if list1[what] {
 				list[what] = true
