@@ -374,7 +374,7 @@ func (p *parser) parseProg() (*Prog, error) {
 			if err != nil {
 				panic("Unable to parse original strace return value " + fmt.Sprintf("%s", val) + "\n")
 			}
-			c.Meta.RetVal = v
+			c.StraceRetVal = v
 			p.Parse(']')
 		}
 
