@@ -129,7 +129,7 @@ func (ctx *serializer) call(c *Call) {
 	}
 
 	// serialize original return value
-	ctx.printf("[%d]", c.Meta.RetVal)
+	ctx.printf("[%d]", c.StraceRetVal)
 
 	ctx.printf("\n")
 }
