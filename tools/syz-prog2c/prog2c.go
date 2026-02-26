@@ -313,17 +313,7 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 		case "fchmodat":
 			subdirPath := sanitizePathArg(call, 1)
 			subdirs[subdirPath] = true
-		case "send$inet6":
-			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
-		case "send$inet":
-			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
-		case "send$unix":
-			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
-		case "sendto$inet6":
-			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
-		case "sendto$inet":
-			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
-		case "sendto$unix":
+		case "write", "send$inet6", "send$inet", "send$unix",  "sendto$inet6",  "sendto$unix":
 			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
 		}
 	}
