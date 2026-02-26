@@ -50,7 +50,6 @@ func ParseData(data []byte, splitThreads bool) (*TraceTree, *Trace, error) {
 			tree.add(call)
 		} else {
 			if !call.Resumed {
-				trace.Calls = append(trace.Calls, call)
 				lastCalls[call.Pid] = call
 			} else {
 				lastCall := lastCalls[call.Pid]
@@ -62,6 +61,11 @@ func ParseData(data []byte, splitThreads bool) (*TraceTree, *Trace, error) {
 				lastCall.Args = append(lastCall.Args, call.Args...)
 				lastCall.Paused = false
 				lastCall.Ret = call.Ret
+				call = lastCall
+			}
+
+			if !call.Paused {
+				trace.Calls = append(trace.Calls, call)
 			}
 		}
 	}
