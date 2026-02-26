@@ -22,7 +22,6 @@ import (
 )
 
 var (
-	flagConfig       = flag.String("config", "", "syzkaller config")
 	flagSession      = flag.String("session", "", "session ID")
 	flagTestName     = flag.String("test_name", "", "test name")
 	flagBaseBuild    = flag.String("base_build", "", "base build ID")
@@ -33,14 +32,14 @@ var (
 
 func main() {
 	flag.Parse()
-	if *flagConfig == "" || *flagSession == "" || *flagTestName == "" {
-		app.Fatalf("--config, --session and --test_name must be set")
+	if *flagSession == "" || *flagTestName == "" {
+		app.Fatalf("--session and --test_name must be set")
 	}
 
 	ctx := context.Background()
 	client := app.DefaultClient()
 
-	testResult := &api.TestResult{
+	testResult := &api.SessionTest{
 		SessionID:      *flagSession,
 		TestName:       *flagTestName,
 		BaseBuildID:    *flagBaseBuild,
@@ -48,7 +47,7 @@ func main() {
 		Result:         api.TestRunning,
 	}
 	// Report that we've begun the test -- it will let us report the findings.
-	err := client.UploadTestResult(ctx, testResult)
+	err := client.UploadSessionTest(ctx, testResult)
 	if err != nil {
 		app.Fatalf("failed to upload test result: %v", err)
 	}
@@ -70,7 +69,7 @@ func main() {
 	}
 
 	// Report the test results.
-	err = client.UploadTestResult(ctx, testResult)
+	err = client.UploadSessionTest(ctx, testResult)
 	if err != nil {
 		app.Fatalf("failed to upload test result: %v", err)
 	}
@@ -103,7 +102,7 @@ func runTest(ctx context.Context, client *api.Client, tracer debugtracer.DebugTr
 
 	var rep *report.Report
 	for i := 0; i < retryCount; i++ {
-		tracer.Log("starting attempt #%d", i)
+		tracer.Logf("starting attempt #%d", i)
 		var err error
 		rep, err = instance.RunSmokeTest(cfg)
 		if err != nil {
@@ -111,11 +110,11 @@ func runTest(ctx context.Context, client *api.Client, tracer debugtracer.DebugTr
 		} else if rep == nil {
 			return true, nil
 		}
-		tracer.Log("attempt failed: %q", rep.Title)
+		tracer.Logf("attempt failed: %q", rep.Title)
 	}
 	if *flagFindings {
-		tracer.Log("reporting the finding")
-		findingErr := client.UploadFinding(ctx, &api.NewFinding{
+		tracer.Logf("reporting the finding")
+		findingErr := client.UploadFinding(ctx, &api.RawFinding{
 			SessionID: *flagSession,
 			TestName:  *flagTestName,
 			Title:     rep.Title,
@@ -126,8 +125,8 @@ func runTest(ctx context.Context, client *api.Client, tracer debugtracer.DebugTr
 			return false, fmt.Errorf("failed to report the finding: %w", findingErr)
 		}
 	} else {
-		tracer.Log("report:\n%s", rep.Report)
-		tracer.Log("output:\n%s", rep.Output)
+		tracer.Logf("report:\n%s", rep.Report)
+		tracer.Logf("output:\n%s", rep.Output)
 	}
 	return false, nil
 }

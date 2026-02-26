@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/google/syzkaller/pkg/ifuzz"
+	"github.com/google/syzkaller/pkg/image"
 )
 
 const (
@@ -34,6 +35,7 @@ type randGen struct {
 	patchConditionalDepth int
 	genKFuzzTest          bool
 	recDepth              map[string]int
+	genDefaultResource    bool
 }
 
 func newRand(target *Target, rs rand.Source) *randGen {
@@ -622,6 +624,10 @@ func (r *randGen) generateParticularCall(s *state, meta *Syscall) (calls []*Call
 	if meta.Attrs.NoGenerate {
 		panic(fmt.Sprintf("generating no_generate call: %v", meta.Name))
 	}
+	return r.generateParticularCallUnsafe(s, meta)
+}
+
+func (r *randGen) generateParticularCallUnsafe(s *state, meta *Syscall) (calls []*Call) {
 	c := MakeCall(meta, nil)
 	// KFuzzTest calls restrict mutation and generation. Since calls to
 	// generateParticularCall can be recursive, we save the previous value, and
@@ -647,7 +653,7 @@ func (target *Target) GenerateAllSyzProg(rs rand.Source) *Prog {
 	r := newRand(target, rs)
 	s := newState(target, target.DefaultChoiceTable(), nil)
 	for _, meta := range target.PseudoSyscalls() {
-		calls := r.generateParticularCall(s, meta)
+		calls := r.generateParticularCallUnsafe(s, meta)
 		for _, c := range calls {
 			s.analyze(c)
 			p.Calls = append(p.Calls, c)
@@ -666,8 +672,7 @@ func (target *Target) PseudoSyscalls() []*Syscall {
 	for _, meta := range target.Syscalls {
 		if !strings.HasPrefix(meta.CallName, "syz_") ||
 			handled[meta.CallName] ||
-			meta.Attrs.Disabled ||
-			meta.Attrs.NoGenerate {
+			meta.Attrs.Disabled {
 			continue
 		}
 		ret = append(ret, meta)
@@ -679,11 +684,13 @@ func (target *Target) PseudoSyscalls() []*Syscall {
 // GenSampleProg generates a single sample program for the call.
 func (target *Target) GenSampleProg(meta *Syscall, rs rand.Source, ct *ChoiceTable) *Prog {
 	r := newRand(target, rs)
+	// Make sure no additional calls are created to provide the resources used by meta.
+	r.genDefaultResource = true
 	s := newState(target, ct, nil)
 	p := &Prog{
 		Target: target,
 	}
-	for _, c := range r.generateParticularCall(s, meta) {
+	for _, c := range r.generateParticularCallUnsafe(s, meta) {
 		s.analyze(c)
 		p.Calls = append(p.Calls, c)
 	}
@@ -766,14 +773,14 @@ func (a *ResourceType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls [
 		defer func() { r.inGenerateResource = false }()
 		canRecurse = true
 	}
-	if canRecurse && r.nOutOf(8, 10) ||
-		!canRecurse && r.nOutOf(19, 20) {
+	if (canRecurse && r.nOutOf(8, 10) ||
+		!canRecurse && r.nOutOf(19, 20)) && !r.genDefaultResource {
 		arg = r.existingResource(s, a, dir)
 		if arg != nil {
 			return
 		}
 	}
-	if canRecurse {
+	if canRecurse && !r.genDefaultResource {
 		if r.oneOf(4) {
 			arg, calls = r.resourceCentric(s, a, dir)
 			if arg != nil {
@@ -837,7 +844,18 @@ func (a *BufferType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*
 		}
 		return MakeDataArg(a, dir, r.generateText(a.Text)), nil
 	case BufferCompressed:
-		panic(fmt.Sprintf("can't generate compressed type %v", a))
+		// Not super useful data, but we need something for pkg/csource tests.
+		// During fuzzing, such syscalls are marked as no_generate and we only take
+		// the compressed data from the seeds or corpus.
+		sz := r.randBufLen()
+		if dir == DirOut {
+			return MakeOutDataArg(a, dir, sz), nil
+		}
+		data := make([]byte, sz)
+		for i := range data {
+			data[i] = byte(r.Intn(256))
+		}
+		return MakeDataArg(a, dir, image.Compress(data)), nil
 	default:
 		panic("unknown buffer kind")
 	}

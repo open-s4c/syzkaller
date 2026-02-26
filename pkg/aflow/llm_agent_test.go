@@ -111,28 +111,23 @@ func TestSummaryWindow(t *testing.T) {
 	type toolResults struct {
 		ResFoo int `jsonschema:"foo"`
 	}
-
-	// The history (req) starts with 1 message (User Prompt).
-	// Each tool call cycle adds 2 messages (Model Response + Tool Response).
-	agent := &LLMAgent{
-		Name:          "summary_agent",
-		Model:         "model",
-		Reply:         "Reply",
-		SummaryWindow: 3,
-		TaskType:      FormalReasoningTask,
-		Instruction:   "Instructions",
-		Prompt:        "Initial Prompt",
-		Tools: []Tool{
-			NewFuncTool("tick", func(ctx *Context, state struct{}, args struct{}) (toolResults, error) {
-				return toolResults{123}, nil
-			}, "logic ticker"),
-		},
-	}
-
 	requestSeq := 0
 	testFlow[struct{}, flowOutputs](t, nil,
 		map[string]any{"Reply": "Done"},
-		Pipeline(agent),
+		&LLMAgent{
+			Name:          "summary_agent",
+			Model:         "model",
+			Reply:         "Reply",
+			SummaryWindow: 3,
+			TaskType:      FormalReasoningTask,
+			Instruction:   "Instructions",
+			Prompt:        "Initial Prompt",
+			Tools: []Tool{
+				NewFuncTool("tick", func(ctx *Context, state struct{}, args struct{}) (toolResults, error) {
+					return toolResults{123}, nil
+				}, "logic ticker"),
+			},
+		},
 		[]any{
 			func(model string, cfg *genai.GenerateContentConfig, req []*genai.Content) (
 				*genai.GenerateContentResponse, error) {
@@ -156,6 +151,91 @@ func TestSummaryWindow(t *testing.T) {
 							Role:  genai.RoleModel,
 						}}}}, nil
 			},
+		},
+	)
+}
+
+func TestSetResultsToolIsNotLast(t *testing.T) {
+	type flowOutputs struct {
+		Reply  string
+		Result int
+	}
+	type flowResults struct {
+		Result int `jsonschema:"Result"`
+	}
+	testFlow[struct{}, flowOutputs](t, nil,
+		map[string]any{"Reply": "Done", "Result": 42},
+		&LLMAgent{
+			Name:        "smarty",
+			Model:       "model",
+			Reply:       "Reply",
+			Outputs:     LLMOutputs[flowResults](),
+			TaskType:    FormalReasoningTask,
+			Instruction: "Instructions",
+			Prompt:      "Initial Prompt",
+			Tools: []Tool{
+				NewFuncTool("tool", func(ctx *Context, state struct{}, args struct{}) (struct{}, error) {
+					return struct{}{}, nil
+				}, "tool"),
+			},
+		},
+		[]any{
+			&genai.Part{FunctionCall: &genai.FunctionCall{Name: "set-results", Args: map[string]any{"Result": 42}}},
+			&genai.Part{FunctionCall: &genai.FunctionCall{Name: "tool"}},
+			genai.NewPartFromText("Done"),
+		},
+	)
+}
+
+func TestOnlyStructuredOutputs(t *testing.T) {
+	type flowOutputs struct {
+		Result int
+	}
+	type flowResults struct {
+		Result int `jsonschema:"Result"`
+	}
+	testFlow[struct{}, flowOutputs](t, nil,
+		map[string]any{"Result": 42},
+		&LLMAgent{
+			Name:        "smarty",
+			Model:       "model",
+			Outputs:     LLMOutputs[flowResults](),
+			TaskType:    FormalReasoningTask,
+			Instruction: "Instructions",
+			Prompt:      "Initial Prompt",
+		},
+		[]any{
+			&genai.Part{FunctionCall: &genai.FunctionCall{Name: "set-results", Args: map[string]any{"Result": 42}}},
+		},
+	)
+}
+
+func TestNilToolArg(t *testing.T) {
+	type flowResults struct {
+		Result string
+	}
+	type toolArgs struct {
+		Optional *int `jsonschema:"An optional arg."`
+	}
+	testFlow[struct{}, flowResults](t, nil,
+		map[string]any{"Result": "Result"},
+		&LLMAgent{
+			Name:        "smarty",
+			Model:       "model",
+			Reply:       "Result",
+			TaskType:    FormalReasoningTask,
+			Instruction: "Instructions",
+			Prompt:      "Initial Prompt",
+			Tools: []Tool{
+				NewFuncTool("tool", func(ctx *Context, state struct{}, args toolArgs) (struct{}, error) {
+					require.Equal(t, args.Optional, nil)
+					return struct{}{}, nil
+				}, "tool"),
+			},
+		},
+		[]any{
+			&genai.Part{FunctionCall: &genai.FunctionCall{Name: "tool", Args: map[string]any{"Optional": nil}}},
+			genai.NewPartFromText("Result"),
 		},
 	)
 }

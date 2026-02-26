@@ -227,6 +227,12 @@ var archConfigs = map[string]*archConfig{
 		RngDev:                 "virtio-rng-pci",
 		UseNewQemuImageOptions: true,
 	},
+	"openbsd/amd64": {
+		Qemu:     "qemu-system-x86_64",
+		QemuArgs: "-enable-kvm -cpu host,migratable=off",
+		NetDev:   "virtio-net-pci",
+		RngDev:   "virtio-rng-pci",
+	},
 	"darwin/amd64": {
 		Qemu: "qemu-system-x86_64",
 		QemuArgs: strings.Join([]string{
@@ -491,8 +497,10 @@ func (inst *instance) boot() error {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	if err := vmimpl.WaitForSSH(10*time.Minute*inst.timeouts.Scale, inst.SSHOptions,
-		inst.os, inst.merger.Err, false, inst.debug); err != nil {
+		inst.os, inst.merger.Errors(ctx), false, inst.debug); err != nil {
 		bootOutputStop <- true
 		<-bootOutputStop
 		return vmimpl.MakeBootError(err, bootOutput)
@@ -726,6 +734,7 @@ func (inst *instance) Run(ctx context.Context, command string) (
 		return nil, nil, err
 	}
 	wpipe.Close()
+	wpipeErr.Close()
 	return vmimpl.Multiplex(ctx, cmd, inst.merger, vmimpl.MultiplexConfig{
 		Debug: inst.debug,
 		Scale: inst.timeouts.Scale,

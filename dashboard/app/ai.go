@@ -26,8 +26,6 @@ import (
 	"google.golang.org/appengine/v2/log"
 )
 
-const AIAccessLevel = AccessUser
-
 type uiAIJobsPage struct {
 	Header          *uiHeader
 	Jobs            []*uiAIJob
@@ -39,10 +37,11 @@ type uiAIJobPage struct {
 	Header *uiHeader
 	Job    *uiAIJob
 	// The slice contains the same single Job, just for HTML templates convenience.
-	Jobs        []*uiAIJob
-	CrashReport template.HTML
-	Trajectory  []*uiAITrajectorySpan
-	History     []*uiJobReviewHistory
+	Jobs           []*uiAIJob
+	CrashReport    template.HTML
+	Trajectory     []*uiAITrajectorySpan
+	History        []*uiJobReviewHistory
+	TrajectoryJSON template.JS
 }
 
 type uiJobReviewHistory struct {
@@ -64,6 +63,7 @@ type uiAIJob struct {
 	CodeRevisionLink string
 	Error            string
 	Correct          string
+	CorrectTitle     string
 	Results          []*uiAIResult
 }
 
@@ -94,9 +94,6 @@ type uiAITrajectorySpan struct {
 }
 
 func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	if err := checkAccessLevel(ctx, r, AIAccessLevel); err != nil {
-		return err
-	}
 	hdr, err := commonHeader(ctx, r, w, "")
 	if err != nil {
 		return err
@@ -105,19 +102,40 @@ func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		return err
 	}
-	workflowParam := r.FormValue("workflow")
+	jobs, err = filterJobsAccess(ctx, r, jobs)
+	if err != nil {
+		return err
+	}
+	const (
+		workflowAll             = "ALL"
+		workflowNeedsModeration = "NEEDS MODERATION"
+	)
+	currentWorkflow := r.FormValue("workflow")
+	if currentWorkflow == "" {
+		currentWorkflow = workflowAll
+	}
 	var uiJobs []*uiAIJob
 	for _, job := range jobs {
-		if workflowParam != "" && job.Workflow != workflowParam {
-			continue
+		matched := false
+		switch currentWorkflow {
+		case workflowAll:
+			matched = true
+		case workflowNeedsModeration:
+			matched = string(job.Type) == job.Workflow &&
+				job.Finished.Valid && job.Error == "" &&
+				!job.Correct.Valid
+		default:
+			matched = job.Workflow == currentWorkflow
 		}
-		uiJobs = append(uiJobs, makeUIAIJob(job))
+		if matched {
+			uiJobs = append(uiJobs, makeUIAIJob(job))
+		}
 	}
 	workflows, err := aidb.LoadWorkflows(ctx)
 	if err != nil {
 		return err
 	}
-	var workflowNames []string
+	workflowNames := []string{workflowAll, workflowNeedsModeration}
 	for _, w := range workflows {
 		workflowNames = append(workflowNames, w.Name)
 	}
@@ -126,20 +144,29 @@ func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Reques
 		Header:          hdr,
 		Jobs:            uiJobs,
 		Workflows:       workflowNames,
-		CurrentWorkflow: workflowParam,
+		CurrentWorkflow: currentWorkflow,
 	}
 	return serveTemplate(w, "ai_jobs.html", page)
 }
 
 func handleAIJobPage(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	if err := checkAccessLevel(ctx, r, AIAccessLevel); err != nil {
-		return err
-	}
 	job, err := aidb.LoadJob(ctx, r.FormValue("id"))
 	if err != nil {
 		return err
 	}
+	if jobs, err := filterJobsAccess(ctx, r, []*aidb.Job{job}); err != nil {
+		return err
+	} else if len(jobs) == 0 {
+		return ErrAccess
+	}
+	hdr, err := commonHeader(ctx, r, w, job.Namespace)
+	if err != nil {
+		return err
+	}
 	if correct := r.FormValue("correct"); correct != "" {
+		if !hdr.AIActions {
+			return ErrAccess
+		}
 		if !job.Finished.Valid || job.Error != "" {
 			return fmt.Errorf("job is in wrong state to set correct status")
 		}
@@ -176,10 +203,6 @@ func handleAIJobPage(ctx context.Context, w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return err
 	}
-	hdr, err := commonHeader(ctx, r, w, job.Namespace)
-	if err != nil {
-		return err
-	}
 	var args map[string]any
 	if job.Args.Valid {
 		args = job.Args.Value.(map[string]any)
@@ -193,15 +216,43 @@ func handleAIJobPage(ctx context.Context, w http.ResponseWriter, r *http.Request
 		crashReport = linkifyReport(report, args["KernelRepo"].(string), args["KernelCommit"].(string))
 	}
 	uiJob := makeUIAIJob(job)
+	trajectoryJSON, _ := json.Marshal(makeUIAITrajectory(trajectory))
 	page := &uiAIJobPage{
-		Header:      hdr,
-		Job:         uiJob,
-		Jobs:        []*uiAIJob{uiJob},
-		CrashReport: crashReport,
-		Trajectory:  makeUIAITrajectory(trajectory),
-		History:     makeUIJobReviewHistory(history),
+		Header:         hdr,
+		Job:            uiJob,
+		Jobs:           []*uiAIJob{uiJob},
+		CrashReport:    crashReport,
+		Trajectory:     makeUIAITrajectory(trajectory),
+		History:        makeUIJobReviewHistory(history),
+		TrajectoryJSON: template.JS(trajectoryJSON),
 	}
 	return serveTemplate(w, "ai_job.html", page)
+}
+
+func filterJobsAccess(ctx context.Context, r *http.Request, jobs []*aidb.Job) ([]*aidb.Job, error) {
+	bugKeyIDs := map[string]bool{}
+	for _, job := range jobs {
+		if job.BugID.Valid {
+			bugKeyIDs[job.BugID.StringVal] = true
+		}
+	}
+	var bugKeys []*db.Key
+	for id := range bugKeyIDs {
+		bugKeys = append(bugKeys, db.NewKey(ctx, "Bug", id, 0, nil))
+	}
+	bugs := make([]*Bug, len(bugKeys))
+	if err := db.GetMulti(ctx, bugKeys, bugs); err != nil {
+		return nil, err
+	}
+	accessLevel := accessLevel(ctx, r)
+	bugAccess := map[string]AccessLevel{}
+	for _, bug := range bugs {
+		bugAccess[bug.keyHash(ctx)] = bug.sanitizeAccess(ctx, accessLevel)
+	}
+	jobs = slices.DeleteFunc(jobs, func(job *aidb.Job) bool {
+		return accessLevel < bugAccess[job.BugID.StringVal]
+	})
+	return jobs, nil
 }
 
 func makeUIAIJob(job *aidb.Job) *uiAIJob {
@@ -228,16 +279,22 @@ func makeUIAIJob(job *aidb.Job) *uiAIJob {
 	})
 
 	correct := aiCorrectnessIncorrect
+	title := "Incorrect"
 	if !job.Started.Valid {
 		correct = aiCorrectnessPending
+		title = "Job is pending"
 	} else if !job.Finished.Valid {
 		correct = aiCorrectnessRunning
+		title = "Job is running"
 	} else if job.Error != "" {
 		correct = aiCorrectnessErrored
+		title = "Job failed with an error"
 	} else if !job.Correct.Valid {
 		correct = aiCorrectnessUnset
+		title = "Not yet reviewed"
 	} else if job.Correct.Bool {
 		correct = aiCorrectnessCorrect
+		title = "Correct"
 	}
 	return &uiAIJob{
 		ID:               job.ID,
@@ -252,6 +309,7 @@ func makeUIAIJob(job *aidb.Job) *uiAIJob {
 		CodeRevisionLink: vcs.LogLink(vcs.SyzkallerRepo, job.CodeRevision),
 		Error:            job.Error,
 		Correct:          correct,
+		CorrectTitle:     title,
 		Results:          results,
 	}
 }
@@ -315,6 +373,9 @@ func apiAIJobPoll(ctx context.Context, req *dashapi.AIJobPollReq) (any, error) {
 	for _, flow := range req.Workflows {
 		if flow.Type == "" || flow.Name == "" {
 			return nil, fmt.Errorf("invalid request")
+		}
+		if err := aiCheckClientWorkflow(ctx, flow.Name); err != nil {
+			return nil, err
 		}
 	}
 	if err := aidb.UpdateWorkflows(ctx, req.Workflows); err != nil {
@@ -384,6 +445,9 @@ func apiAIJobDone(ctx context.Context, req *dashapi.AIJobDoneReq) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := aiCheckClientWorkflow(ctx, job.Workflow); err != nil {
+		return nil, err
+	}
 	if job.Finished.Valid {
 		return nil, fmt.Errorf("the job %v is already finished", req.ID)
 	}
@@ -401,6 +465,14 @@ func apiAIJobDone(ctx context.Context, req *dashapi.AIJobDoneReq) (any, error) {
 		}
 	}
 	return nil, nil
+}
+
+func aiCheckClientWorkflow(ctx context.Context, workflow string) error {
+	suffix := apiContext(ctx).client.AIWorkflowSuffix
+	if !strings.HasSuffix(workflow, suffix) {
+		return fmt.Errorf("the client is not allowed to execute AI jobs without %q suffix", suffix)
+	}
+	return nil
 }
 
 func aiJobUpdate(ctx context.Context, job *aidb.Job) error {
@@ -459,6 +531,23 @@ func aiBugLabel(job *aidb.Job) (typ BugLabelType, value string, set bool, err0 e
 			return RaceLabel, BenignRace, true, nil
 		}
 		return RaceLabel, HarmfulRace, true, nil
+	case ai.WorkflowModeration:
+		// For now we require a manual correctness check.
+		if !job.Correct.Valid {
+			return
+		}
+		if !job.Correct.Bool {
+			return ActionableLabel, "", false, nil
+		}
+		res, err := castJobResults[ai.ModerationOutputs](job)
+		if err != nil {
+			err0 = err
+			return
+		}
+		if !res.Confident {
+			return
+		}
+		return ActionableLabel, "", res.Actionable, nil
 	}
 	return
 }
@@ -519,10 +608,10 @@ func aiBugWorkflows(ctx context.Context, bug *Bug) ([]*uiWorkflow, error) {
 
 // aiBugWorkflows returns active workflows that are applicable for the bug.
 
-func aiBugJobCreate(ctx context.Context, workflow string, bug *Bug, extraArgs map[string]any) error {
+func aiBugJobCreate(ctx context.Context, workflow string, bug *Bug, extraArgs map[string]any) (string, error) {
 	workflows, err := aidb.LoadWorkflows(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var typ ai.WorkflowType
 	for _, flow := range workflows {
@@ -532,19 +621,20 @@ func aiBugJobCreate(ctx context.Context, workflow string, bug *Bug, extraArgs ma
 		}
 	}
 	if typ == "" {
-		return fmt.Errorf("workflow %v does not exist", workflow)
+		return "", fmt.Errorf("workflow %v does not exist", workflow)
 	}
 	return bugJobCreate(ctx, workflow, typ, bug, extraArgs)
 }
 
-func bugJobCreate(ctx context.Context, workflow string, typ ai.WorkflowType, bug *Bug, extraArgs map[string]any) error {
+func bugJobCreate(ctx context.Context, workflow string, typ ai.WorkflowType, bug *Bug, extraArgs map[string]any) (
+	string, error) {
 	crash, crashKey, err := findCrashForBug(ctx, bug)
 	if err != nil {
-		return err
+		return "", err
 	}
 	build, err := loadBuild(ctx, bug.Namespace, crash.BuildID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	tx := func(ctx context.Context) error {
 		return addCrashReference(ctx, crashKey.IntID(), bug.key(ctx),
@@ -553,7 +643,7 @@ func bugJobCreate(ctx context.Context, workflow string, typ ai.WorkflowType, bug
 	if err := runInTransaction(ctx, tx, &db.TransactionOptions{
 		XG: true,
 	}); err != nil {
-		return fmt.Errorf("addCrashReference failed: %w", err)
+		return "", fmt.Errorf("addCrashReference failed: %w", err)
 	}
 	args := map[string]any{
 		"BugTitle":        bug.Title,
@@ -583,31 +673,21 @@ func bugJobCreate(ctx context.Context, workflow string, typ ai.WorkflowType, bug
 // autoCreateAIJobs incrementally creates AI jobs for existing bugs, returns if any new jobs were created.
 //
 // The idea is as follows. We have a predicate (workflowsForBug) which says what workflows need to be
-// created for a bug. Each bug has AIJobCheck integer field, which holds version of the predicate
-// that was applied to the bug. The current/latest version is stored in currentAIJobCheckSeq.
-// We fetch some number of bugs with AIJobCheck<currentAIJobCheckSeq and check if we need to create
+// created for a bug. Each bug has AIJobCheck integer field, which holds date when the predicate was
+// applied to the bug. We fetch some number of bugs with AIJobCheck<currentDate and check if we need to create
 // new jobs for them. The check is done by executing workflowsForBug for the bug, loading existing
 // pending/finished jobs for the bug, and finding any jobs returned by workflowsForBug that don't exist yet.
-//
-// If the predicate workflowsForBug is updated, currentAIJobCheckSeq needs to be incremented as well.
-// This will trigger immediate incremental re-checking of all existing bugs to create new jobs.
-// AIJobCheck can always be reset to 0 for a particular bug to trigger re-checking for this single bug.
-// This may be useful when, for example, a bug gets the first reproducer, and some jobs are created
-// only for bugs with reproducers. AIJobCheck may also be reset to 0 when a job finishes with an error
-// to trigger creation of a new job of the same type.
-//
-// TODO(dvyukov): figure out how to handle jobs with errors and unfinished jobs.
-// Do we want to automatically restart them or not?
 func autoCreateAIJobs(ctx context.Context) (bool, error) {
+	date := int64(timeDate(timeNow(ctx)))
 	for ns, cfg := range getConfig(ctx).Namespaces {
-		if !cfg.AI {
+		if cfg.AI == nil {
 			continue
 		}
 		var bugs []*Bug
 		keys, err := db.NewQuery("Bug").
 			Filter("Namespace=", ns).
 			Filter("Status=", BugStatusOpen).
-			Filter("AIJobCheck<", currentAIJobCheckSeq).
+			Filter("AIJobCheck<", date).
 			Limit(100).
 			GetAll(ctx, &bugs)
 		if err != nil {
@@ -629,7 +709,7 @@ func autoCreateAIJobs(ctx context.Context) (bool, error) {
 			}
 		}
 		if err := updateBatch(ctx, updateKeys, func(_ *db.Key, bug *Bug) {
-			bug.AIJobCheck = currentAIJobCheckSeq
+			bug.AIJobCheck = date
 		}); err != nil {
 			return false, err
 		}
@@ -649,23 +729,46 @@ func autoCreateAIJob(ctx context.Context, bug *Bug, bugKey *db.Key) (bool, error
 	if err != nil {
 		return false, err
 	}
+	workflowAttempts := map[ai.WorkflowType]struct {
+		count int
+		last  time.Time
+	}{}
 	for _, job := range jobs {
-		// Already have a pending unfinished job.
-		if !job.Finished.Valid ||
-			// Have finished successful job.
-			job.Finished.Valid && job.Error == "" {
-			delete(workflows, ai.WorkflowType(job.Workflow))
+		typ := ai.WorkflowType(job.Workflow)
+		// Have finished successful job.
+		if job.Finished.Valid && job.Error == "" ||
+			// Or already have a pending or a running job.
+			!job.Started.Valid || timeSince(ctx, job.Started.Time) < 24*time.Hour {
+			// Don't create new jobs for these types.
+			delete(workflows, typ)
+			continue
+		}
+		// Have a failed, or aborted job.
+		attempts := workflowAttempts[typ]
+		attempts.count++
+		if job.Started.Time.After(attempts.last) {
+			attempts.last = job.Started.Time
+		}
+		workflowAttempts[typ] = attempts
+	}
+	// For failed/aborted jobs, we don't know if the reason was temporary or permanent.
+	// Failed kernel builds and failed repros may be permanent, but also may be flakes,
+	// or may be fixed over time. So we retry failed/aborted jobs with an exponential
+	// backoff based on attempts count. 1 job is retried in 1 day; 2 jobs - in 2 days;
+	// 3 jobs - in 4 days, and so on up to the cap of 30 days.
+	for typ, attempts := range workflowAttempts {
+		retryPeriod := time.Duration(min(30, 1<<(attempts.count-1))) * 24 * time.Hour
+		if timeSince(ctx, attempts.last) < retryPeriod {
+			delete(workflows, typ)
 		}
 	}
 	for workflow := range workflows {
-		if err := bugJobCreate(ctx, string(workflow), workflow, bug, nil); err != nil {
+		if _, err := bugJobCreate(ctx, string(workflow), workflow, bug, nil); err != nil {
 			return false, err
 		}
 	}
 	return len(workflows) != 0, nil
 }
-
-const currentAIJobCheckSeq = 1
 
 func workflowsForBug(bug *Bug, manual bool) map[ai.WorkflowType]bool {
 	workflows := make(map[ai.WorkflowType]bool)

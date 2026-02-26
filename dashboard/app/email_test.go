@@ -1141,7 +1141,7 @@ func TestEmailPatchTestingAccess(t *testing.T) {
 	c.expectNoEmail()
 
 	// The patch test job should also not be created.
-	pollResp := client.pollJobs(build.Manager)
+	pollResp := c.globalClient.pollJobs(build.Manager)
 	c.expectEQ(pollResp.ID, "")
 }
 
@@ -1171,7 +1171,8 @@ The specified label value is incorrect.
 Please use one of the supported label values.
 
 The following labels are suported:
-missing-backport, no-reminders, prio: {low, normal, high}, subsystems: {.. see below ..}
+actionable, missing-backport, no-reminders, prio: {low, normal, high}, subsystems: {..
+see below ..}
 The list of subsystems: https://testapp.appspot.com/access-public-email/subsystems?all=true
 
 `)
@@ -1281,7 +1282,8 @@ The specified label "label" is unknown.
 Please use one of the supported labels.
 
 The following labels are suported:
-missing-backport, no-reminders, prio: {low, normal, high}, subsystems: {.. see below ..}
+actionable, missing-backport, no-reminders, prio: {low, normal, high}, subsystems: {..
+see below ..}
 The list of subsystems: https://testapp.appspot.com/access-public-email/subsystems?all=true
 
 `)

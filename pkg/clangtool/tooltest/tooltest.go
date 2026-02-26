@@ -10,17 +10,22 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/syzkaller/pkg/clangtool"
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/testutil"
+	"github.com/google/syzkaller/sys/targets"
 )
 
 var FlagUpdate = flag.Bool("update", false, "update golden files")
 
 func TestClangTool[Output any, OutputPtr clangtool.OutputDataPtr[Output]](t *testing.T, tool string) {
+	if runtime.GOOS != targets.Linux {
+		t.Skip("clang tools can only be tested on linux")
+	}
 	ForEachTestFile(t, tool, func(t *testing.T, cfg *clangtool.Config, file string) {
 		out, err := clangtool.Run[Output, OutputPtr](cfg)
 		if err != nil {
@@ -34,10 +39,10 @@ func TestClangTool[Output any, OutputPtr clangtool.OutputDataPtr[Output]](t *tes
 	})
 }
 
-func LoadOutput[Output any, OutputPtr clangtool.OutputDataPtr[Output]](t *testing.T) OutputPtr {
+func LoadOutput[Output any, OutputPtr clangtool.OutputDataPtr[Output]](t *testing.T, dir string) OutputPtr {
 	out := OutputPtr(new(Output))
-	v := clangtool.NewVerifier("testdata")
-	forEachTestFile(t, func(t *testing.T, file string) {
+	v := clangtool.NewVerifier(dir)
+	forEachTestFile(t, dir, func(t *testing.T, file string) {
 		tmp, err := osutil.ReadJSON[OutputPtr](file + ".json")
 		if err != nil {
 			t.Fatal(err)
@@ -52,7 +57,7 @@ func LoadOutput[Output any, OutputPtr clangtool.OutputDataPtr[Output]](t *testin
 }
 
 func ForEachTestFile(t *testing.T, tool string, fn func(t *testing.T, cfg *clangtool.Config, file string)) {
-	forEachTestFile(t, func(t *testing.T, file string) {
+	forEachTestFile(t, "testdata", func(t *testing.T, file string) {
 		t.Run(filepath.Base(file), func(t *testing.T) {
 			t.Parallel()
 			buildDir := t.TempDir()
@@ -78,9 +83,9 @@ func ForEachTestFile(t *testing.T, tool string, fn func(t *testing.T, cfg *clang
 	})
 }
 
-func forEachTestFile(t *testing.T, fn func(t *testing.T, file string)) {
+func forEachTestFile(t *testing.T, dir string, fn func(t *testing.T, file string)) {
 	var files []string
-	err := filepath.WalkDir(osutil.Abs("testdata"), func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(osutil.Abs(dir), func(path string, d fs.DirEntry, err error) error {
 		if d.Name()[0] != '.' && filepath.Ext(d.Name()) == ".c" {
 			files = append(files, path)
 		}

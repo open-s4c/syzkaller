@@ -82,10 +82,10 @@ func DummyBuild() *api.Build {
 	}
 }
 
-func DummyFindings() []*api.NewFinding {
-	var findings []*api.NewFinding
+func DummyFindings() []*api.RawFinding {
+	var findings []*api.RawFinding
 	for i := 0; i < 2; i++ {
-		findings = append(findings, &api.NewFinding{
+		findings = append(findings, &api.RawFinding{
 			Title:    fmt.Sprintf("finding %d", i),
 			TestName: "test",
 			Report:   []byte(fmt.Sprintf("report %d", i)),
@@ -108,7 +108,7 @@ func FakeSeriesWithFindings(t *testing.T, ctx context.Context, env *app.AppEnvir
 	ids := UploadTestSeries(t, ctx, client, series)
 	baseBuild := UploadTestBuild(t, ctx, client, DummyBuild())
 	patchedBuild := UploadTestBuild(t, ctx, client, DummyBuild())
-	err := client.UploadTestResult(ctx, &api.TestResult{
+	err := client.UploadSessionTest(ctx, &api.SessionTest{
 		SessionID:      ids.SessionID,
 		BaseBuildID:    baseBuild.ID,
 		PatchedBuildID: patchedBuild.ID,

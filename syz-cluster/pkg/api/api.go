@@ -10,14 +10,15 @@ type TriageResult struct {
 	// If set, ignore the patch series completely.
 	SkipReason string `json:"skip_reason"`
 	// Fuzzing configuration to try (NULL if nothing).
-	Fuzz []*FuzzTask `json:"fuzz"`
+	Targets []*TestTarget `json:"targets"`
 }
 
-// The data layout faclitates the simplicity of the workflow definition.
-type FuzzTask struct {
+// TestTarget groups the testing tasks that share the same base/patched builds.
+type TestTarget struct {
 	Base    BuildRequest `json:"base"`
 	Patched BuildRequest `json:"patched"`
-	FuzzConfig
+	Track   string       `json:"track"` // E.g. KASAN.
+	Fuzz    *FuzzConfig  `json:"fuzz"`
 }
 
 const (
@@ -31,7 +32,6 @@ const (
 // FuzzConfig represents a set of parameters passed to the fuzz step.
 // The triage step aggregates multiple KernelFuzzConfig to construct FuzzConfig.
 type FuzzConfig struct {
-	Track      string   `json:"track"` // E.g. KASAN.
 	Focus      []string `json:"focus"`
 	CorpusURLs []string `json:"corpus_urls"`
 	// Don't expect kernel coverage for the patched area.
@@ -101,7 +101,7 @@ const (
 	TestError   string = "error"
 )
 
-type TestResult struct {
+type SessionTest struct {
 	SessionID      string `json:"session_id"`
 	BaseBuildID    string `json:"base_build_id"`
 	PatchedBuildID string `json:"patched_build_id"`
@@ -114,8 +114,9 @@ type BootResult struct {
 	Success bool `json:"success"`
 }
 
-// NewFinding is a kernel crash, boot error, etc. found during a test.
-type NewFinding struct {
+// RawFinding is a kernel crash, boot error, etc. found during a test.
+// It's reported as RawFinding, but for the report purposes it's converted to Finding.
+type RawFinding struct {
 	SessionID    string `json:"session_id"`
 	TestName     string `json:"test_name"`
 	Title        string `json:"title"`
@@ -127,16 +128,17 @@ type NewFinding struct {
 }
 
 type Series struct {
-	ID          string        `json:"id"` // Only included in the reply.
-	ExtID       string        `json:"ext_id"`
-	Title       string        `json:"title"`
-	AuthorEmail string        `json:"author_email"`
-	Cc          []string      `json:"cc"`
-	Version     int           `json:"version"`
-	Link        string        `json:"link"`
-	SubjectTags []string      `json:"subject_tags"`
-	PublishedAt time.Time     `json:"published_at"`
-	Patches     []SeriesPatch `json:"patches"`
+	ID             string        `json:"id"` // Only included in the reply.
+	ExtID          string        `json:"ext_id"`
+	Title          string        `json:"title"`
+	AuthorEmail    string        `json:"author_email"`
+	Cc             []string      `json:"cc"`
+	Version        int           `json:"version"`
+	Link           string        `json:"link"`
+	SubjectTags    []string      `json:"subject_tags"`
+	PublishedAt    time.Time     `json:"published_at"`
+	Patches        []SeriesPatch `json:"patches"`
+	BaseCommitHint string        `json:"base_commit_hint"`
 }
 
 func (s *Series) PatchBodies() [][]byte {
