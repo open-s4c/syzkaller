@@ -282,8 +282,6 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 		case "pwrite64":
 			filesizes = sanitizePwrite64(call, filesizes)
 			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
-		case "write":
-			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
 		case "pread64":
 			filesizes = sanitizePread64(call, filesizes)
 		case "faccessat":
