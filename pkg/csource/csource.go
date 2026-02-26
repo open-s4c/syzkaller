@@ -793,7 +793,9 @@ func (ctx *context) fmtCallBody(call prog.ExecCall) string {
 				case "bind$inet6":
 					argsStrs = append(argsStrs, "sizeof(*(UNIQUE_VAR(ctx->bind6_arg)))")
 					continue
-
+				case "bind$unix":
+					argsStrs = append(argsStrs, "sizeof(sa_family_t)")
+					continue
 				}
 			}
 			if i == 1 {
