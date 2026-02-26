@@ -9,8 +9,6 @@ import (
 	"reflect"
 
 	"github.com/bits-and-blooms/bloom/v3"
-
-	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/google/syzkaller/pkg/hash"
 	"github.com/google/syzkaller/pkg/stat"
 )
@@ -142,9 +140,6 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 	if callIndex0 != -1 {
 		p0, callIndex0, processedCalls = removeUnrelatedCallsInfo(p0, callIndex0, pred, processedCallsIn)
 	}
-
-	mAddrs := usedMemory(p0, processedCalls)
-	mAddrs, processedCalls = keepMemRelation(p0, mAddrs, processedCalls)
 
 	return p0, callIndex0, processedCalls
 }
@@ -508,6 +503,30 @@ func usesRet(call *Call) map[any]bool {
 					val := string(bytes.TrimRight(a.Data(), "\x00"))
 					used[val] = true
 				}
+			}
+		}
+	})
+	return used
+}
+
+func uses(call *Call) map[any]bool {
+	used := make(map[any]bool)
+	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
+		switch typ := arg.Type().(type) {
+		case *ResourceType:
+			a := arg.(*ResultArg)
+			used[a] = true
+			if a.Res != nil {
+				used[a.Res] = true
+			}
+			for use := range a.uses {
+				used[use] = true
+			}
+		case *BufferType:
+			a := arg.(*DataArg)
+			if a.Dir() != DirOut && typ.Kind == BufferFilename {
+				val := string(bytes.TrimRight(a.Data(), "\x00"))
+				used[val] = true
 			}
 		}
 	})
