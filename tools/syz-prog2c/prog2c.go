@@ -45,7 +45,6 @@ var (
 	flagCSB        = flag.Bool("csb", false, "generate CSB test header instead of c file")
 	flagNumNop     = flag.Int("num_nop", 0, "number of NOPs per operation")
 	flagCFile      = flag.String("cfile", "", "output c file instead of stdout")
-	flagNumInvoc   = flag.Int("num_invoc", 10000, "max number of invocations per syscall")
 )
 
 type BMConfigApps struct {
@@ -312,7 +311,7 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 		case "fchmodat":
 			subdirPath := sanitizePathArg(call, 1)
 			subdirs[subdirPath] = true
-		case "write", "send$inet6", "send$inet", "send$unix",  "sendto$inet6",  "sendto$unix":
+		case "write", "send$inet6", "send$inet", "send$unix", "sendto$inet6", "sendto$unix":
 			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
 		}
 	}
@@ -403,10 +402,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to deserialize the program: %v\n", err)
 		os.Exit(1)
 	}
-
-	// limit size of program
-	pLim := limitProgram(p)
-	p = pLim
 
 	// sanitize program
 	pSan, subDirs, filesize, filemap, maxWriteSize := sanitizeProgram(p, progName)
