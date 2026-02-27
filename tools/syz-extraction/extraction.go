@@ -71,8 +71,8 @@ func predTrue(*prog.Prog, int, *stat.Val, string) bool {
 	return true
 }
 
-func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn []bool, c *prog.Cache, resChanges []int) (pOut *prog.Prog, processedCalls []bool) {
-	pOut, processedCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, c, resChanges)
+func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn []bool, c *prog.Cache, resChanges []int) (pOut *prog.Prog, processedCalls []bool, keepCalls []bool) {
+	pOut, processedCalls, keepCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, c, resChanges)
 	return
 }
 
@@ -80,11 +80,15 @@ func generateAllProgs(p *prog.Prog, resChanges []int, threadTree []kv) (pF *prog
 	numCalls := len(p.Calls)
 	processedCalls := make([]bool, numCalls)
 	processedCalls[numCalls - 1] = false
+	keepCalls := make([]bool, numCalls)
+	nonStartCalls := make([]bool, numCalls)
 	outPrefixesIdx := make(map[string]int)
 	prefixLen := 2
 	c := new(prog.Cache)
 	c.Uses = make([]map[any]bool, numCalls)
-	c.Bfs = make([]*bloom.BloomFilter, numCalls)
+	c.Rets = make([]map[any]bool, numCalls)
+	c.UsesBFs = make([]*bloom.BloomFilter, numCalls)
+	c.RetsBFs = make([]*bloom.BloomFilter, numCalls)
 	fmt.Fprintf(os.Stderr, "Number of syscalls before: %d\n", numCalls)
 
 	// go over all thread IDs in decreasing depth starting with the highest depth
@@ -95,11 +99,12 @@ func generateAllProgs(p *prog.Prog, resChanges []int, threadTree []kv) (pF *prog
 			// if i%1000 == 0 {
 			// 	fmt.Fprintf(os.Stderr, "(%d/%d) Finished (cache: %d entries) @ %s.\n", i, numCalls, len(c.Uses), time.Now())
 			// }
-			if !processedCalls[i] && p.Calls[i].StraceTid == kv.Key {
-				fmt.Fprintf(os.Stderr, "Working on index %d\n", i)
-				pF, processedCalls = generateMinimizedProg(p, i, processedCalls, c, resChanges)
-				fmt.Fprintf(os.Stderr, "Extracted length %d Calls:\n", len(pF.Calls))
-				fmt.Fprintf(os.Stderr, "%##v\n", pF.Calls)
+			if !nonStartCalls[i] && p.Calls[i].StraceTid == kv.Key {
+				// fmt.Fprintf(os.Stderr, "Working on index %d\n", i)
+				pF, processedCalls, keepCalls = generateMinimizedProg(p, i, processedCalls, c, resChanges)
+				nonStartCalls = prog.Sliceor(prog.Sliceor(processedCalls, keepCalls), nonStartCalls)
+				// fmt.Fprintf(os.Stderr, "Extracted length %d Calls:\n", len(pF.Calls))
+				// fmt.Fprintf(os.Stderr, "%##v\n", pF.Calls)
 
 				if len(pF.Calls) >= *flagMinCalls {
 					fmt.Fprintf(os.Stderr, "(%d/%d) Number of syscalls after: %d\n", i, len(p.Calls), len(pF.Calls))
@@ -250,6 +255,17 @@ func buildThreadTree(p *prog.Prog) ThreadDepth {
 	return tt
 }
 
+func checks(p *prog.Prog) {
+	for _, c := range p.Calls {
+		if c.Meta.CallName == "io_getevents" {
+			for idx, arg := range c.Args {
+				fmt.Fprintf(os.Stderr, "Argument %d: %#v\n", idx, arg)
+			}
+		}
+	}
+}
+
+
 type kv struct {
 	Key   int64
 	Value int64
@@ -273,8 +289,13 @@ func main() {
 
 	p := readProg()
 
+	// checks(p)
+	// panic("TEST STOP\n")
+
 	threadTree := buildThreadTree(p)
 	threads := sortThreadTree(threadTree)
+
+	fmt.Fprintf(os.Stderr, "Thread dephts:\n%#v\n", threads)
 
 	resChanges := generateResChanges(p)
 

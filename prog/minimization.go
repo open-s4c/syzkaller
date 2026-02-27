@@ -6,7 +6,6 @@ package prog
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"reflect"
 
 	"github.com/bits-and-blooms/bloom/v3"
@@ -35,7 +34,9 @@ var (
 
 type Cache struct {
 	Uses []map[any]bool
-	Bfs  []*bloom.BloomFilter
+	Rets []map[any]bool
+	UsesBFs  []*bloom.BloomFilter
+	RetsBFs  []*bloom.BloomFilter
 }
 
 type MinimizeMode int
@@ -143,8 +144,9 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 	return p0, callIndex0, processedCalls
 }
 
-func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool) {
+func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool, []bool) {
 	var processedCalls []bool
+	var keepCalls []bool
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
 		// It's frequently the case that all subsequent calls were not necessary.
 		// Try to drop them all at once.
@@ -158,10 +160,10 @@ func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	}
 
 	if callIndex0 != -1 {
-		p0, processedCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, c, resChanges)
+		p0, processedCalls, keepCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, c, resChanges)
 	}
 
-	return p0, processedCalls
+	return p0, processedCalls, keepCalls
 }
 
 type minimizePred func(*Prog, int, *stat.Val, string) bool
@@ -234,20 +236,20 @@ func cardinality(a []bool) int {
 	return ret
 }
 
-func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool) {
+func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool, []bool) {
 	keepCalls, removeCalls, resChanges := relatedCallsFullThread(p0, callIndex0, c, resChanges, processedCallsIn)
 	// keepCalls, removeCalls := relatedCallsFullProgram(p0, callIndex0, c, resChanges, processedCallsIn)
 
 	if len(p0.Calls)-cardinality(keepCalls) < 3 {
-		return p0, processedCallsIn
+		return p0, processedCallsIn, keepCalls
 	}
 
-	fmt.Fprintf(os.Stderr, "Cloning with filter of length %d\n", cardinality(keepCalls))
+	// fmt.Fprintf(os.Stderr, "Cloning with filter of length %d\n", cardinality(keepCalls))
 
 	p := p0.CloneFilter(keepCalls)
 
-	processedCalls := sliceor(processedCallsIn, removeCalls)
-	return p, processedCalls
+	processedCalls := Sliceor(processedCallsIn, removeCalls)
+	return p, processedCalls, keepCalls
 }
 
 // removeUnrelatedCalls tries to remove all "unrelated" calls at once.
@@ -362,10 +364,15 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int
 	keepCalls := make([]bool, len(p0.Calls))
 	keepCalls[callIndex0] = true
 	removeCalls := make([]bool, len(p0.Calls))
-	removeCalls[callIndex0] = true
 	usedBF := usesBF(p0.Calls[callIndex0], callIndex0, c)
 	used := usesCache(p0.Calls[callIndex0], callIndex0, c)
 	tid := p0.Calls[callIndex0].StraceTid
+
+	// fmt.Fprintf(os.Stderr, "Starting off with thread %d (idx %d), (syscall %s)\n", tid, callIndex0, p0.Calls[callIndex0].Meta.CallName)
+
+	if retBF(p0.Calls[callIndex0], callIndex0, c).BitSet().None() {
+		removeCalls[callIndex0] = true
+	}
 
 	// nextResChange := 0
 	// nextResChangeIdx := 0
@@ -385,22 +392,26 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int
 			var used1 map[any]bool
 			var usedBF1 *bloom.BloomFilter
 			if call.StraceTid == tid {
+				// fmt.Fprintf(os.Stderr, "Found a matching thread %d (idx %d), (syscall %s)\n", tid, i, p0.Calls[i].Meta.CallName)
 				usedBF1 = usesBF(call, i, c)
 			} else {
 				usedBF1 = retBF(call, i, c)
 			}
 
 			if intersectBFs(usedBF, usedBF1) {
+				// fmt.Fprintf(os.Stderr, "Found a BF intersection on thread %d (idx %d), (syscall %s)\n", call.StraceTid, i, p0.Calls[i].Meta.CallName)
 				if call.StraceTid == tid {
 					used1 = usesCache(call, i, c)
 				} else {
 					used1 = retCache(call, i, c)
 				}
 				if intersects(used, used1) {
-					fmt.Fprintf(os.Stderr, "Found an intersection %d syscall %s\n", i, p0.Calls[i].Meta.CallName)
+					// fmt.Fprintf(os.Stderr, "Found an intersection %d syscall %s\n", i, p0.Calls[i].Meta.CallName)
 					keepCalls[i] = true
 					// dont remove setup calls from parents, they might be necessary to setup for a different thread as well
-					if call.StraceTid == tid {
+					// also dont remove setup calls from this thread, as sibblings might use a shared resource (mysql, file descriptor)
+					if call.StraceTid == tid && retBF(call, i, c).BitSet().None() {
+						// fmt.Fprintf(os.Stderr, "Removing syscall with index %d\n", i)
 						removeCalls[i] = true
 					}
 
@@ -447,8 +458,11 @@ func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
 	for what := range uses {
 		switch what := what.(type) {
 		case *ResultArg:
-			bf.Add(ptrToBA(what))
+			res := ptrToBA(what)
+			bf.Add(res)
+			// fmt.Fprintf(os.Stderr, "Convert resource ResultArg %#v to bloom (%s).\n", what, string(res))
 		case string:
+			// fmt.Fprintf(os.Stderr, "Convert resource string %s to bloom.\n", what)
 			bf.AddString(what)
 		default:
 			panic(fmt.Sprintf("Unclear how to convert %#v into []byte to add it to BloomFilter.\n", what))
@@ -458,22 +472,24 @@ func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
 }
 
 func usesBF(call *Call, i int, c *Cache) *bloom.BloomFilter {
-	ret := c.Bfs[i]
+	// fmt.Fprintf(os.Stderr, "Getting BF for uses...\n")
+	ret := c.UsesBFs[i]
 	if ret == nil {
+		// fmt.Fprintf(os.Stderr, "No BF found\n")
 		uses := usesCache(call, i, c)
 		bf := usesToNewBloom(uses)
-		c.Bfs[i] = bf
+		c.UsesBFs[i] = bf
 		ret = bf
 	}
 	return ret
 }
 
 func retBF(call *Call, i int, c *Cache) *bloom.BloomFilter {
-	ret := c.Bfs[i]
+	ret := c.RetsBFs[i]
 	if ret == nil {
 		uses := retCache(call, i, c)
 		bf := usesToNewBloom(uses)
-		c.Bfs[i] = bf
+		c.RetsBFs[i] = bf
 		ret = bf
 	}
 	return ret
@@ -490,10 +506,10 @@ func usesCache(call *Call, i int, c *Cache) map[any]bool {
 }
 
 func retCache(call *Call, i int, c *Cache) map[any]bool {
-	ret := c.Uses[i]
+	ret := c.Rets[i]
 	if ret == nil {
 		ret = usesRet(call)
-		c.Uses[i] = ret
+		c.Rets[i] = ret
 		return ret
 	}
 	return ret
@@ -505,22 +521,24 @@ func ptrToBA[T any](p *T) []byte {
 
 func usesRet(call *Call) map[any]bool {
 	used := make(map[any]bool)
-	ForRetArg(call, func(arg Arg, _ *ArgCtx) {
-		switch typ := arg.Type().(type) {
-		case *ResourceType:
-			a := arg.(*ResultArg)
-			used[a] = true
-			if a.Res != nil {
-				used[a.Res] = true
-			}
-			for use := range a.uses {
-				used[use] = true
-			}
-		case *BufferType:
-			a := arg.(*DataArg)
-			if a.Dir() != DirOut && typ.Kind == BufferFilename {
-				val := string(bytes.TrimRight(a.Data(), "\x00"))
-				used[val] = true
+	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
+		if arg.Dir() != DirIn {
+			switch typ := arg.Type().(type) {
+			case *ResourceType:
+				a := arg.(*ResultArg)
+				used[a] = true
+				if a.Res != nil {
+					used[a.Res] = true
+				}
+				for use := range a.uses {
+					used[use] = true
+				}
+			case *BufferType:
+				a := arg.(*DataArg)
+				if a.Dir() != DirOut && typ.Kind == BufferFilename {
+					val := string(bytes.TrimRight(a.Data(), "\x00"))
+					used[val] = true
+				}
 			}
 		}
 	})
@@ -568,7 +586,7 @@ func intersectBFs(bf1 *bloom.BloomFilter, bf2 *bloom.BloomFilter) bool {
 	return false
 }
 
-func sliceor(list []bool, list1 []bool) []bool {
+func Sliceor(list []bool, list1 []bool) []bool {
 	if len(list) > len(list1) {
 		for what := range list1 {
 			if list1[what] {
