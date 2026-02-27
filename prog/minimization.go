@@ -362,9 +362,6 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, processedCallsIn
 	usedBF := usesBF(p0.Calls[callIndex0], callIndex0, c)
 	used := usesCache(p0.Calls[callIndex0], callIndex0, c)
 	tid := p0.Calls[callIndex0].StraceTid
-
-	// fmt.Fprintf(os.Stderr, "Starting off with thread %d (idx %d), (syscall %s)\n", tid, callIndex0, p0.Calls[callIndex0].Meta.CallName)
-
 	if retBF(p0.Calls[callIndex0], callIndex0, c).BitSet().None() {
 		removeCalls[callIndex0] = true
 	}
