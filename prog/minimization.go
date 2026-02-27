@@ -144,7 +144,7 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 	return p0, callIndex0, processedCalls
 }
 
-func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool, []bool) {
+func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, processedCallsIn []bool, c *Cache) (*Prog, []bool, []bool) {
 	var processedCalls []bool
 	var keepCalls []bool
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
@@ -153,7 +153,7 @@ func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	}
 
 	if callIndex0 != -1 {
-		p0, processedCalls, keepCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, c)
+		p0, processedCalls, keepCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, processedCallsIn, c)
 	}
 
 	return p0, processedCalls, keepCalls
@@ -229,7 +229,7 @@ func cardinality(a []bool) int {
 	return ret
 }
 
-func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool, []bool) {
+func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, processedCallsIn []bool, c *Cache) (*Prog, []bool, []bool) {
 	keepCalls, removeCalls := relatedCallsFullThread(p0, callIndex0, c, processedCallsIn)
 	// keepCalls, removeCalls := relatedCallsFullProgram(p0, callIndex0, c, processedCallsIn)
 

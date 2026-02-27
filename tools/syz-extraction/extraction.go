@@ -66,12 +66,8 @@ func readProg() (p *prog.Prog) {
 	return
 }
 
-func predTrue(*prog.Prog, int, *stat.Val, string) bool {
-	return true
-}
-
 func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn []bool, c *prog.Cache, ) (pOut *prog.Prog, processedCalls []bool, keepCalls []bool) {
-	pOut, processedCalls, keepCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, c)
+	pOut, processedCalls, keepCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, processedCallsIn, c)
 	return
 }
 
