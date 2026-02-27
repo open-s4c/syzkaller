@@ -140,13 +140,6 @@ func foreachSubArgWithStack(arg Arg, f func(Arg, *ArgCtx)) {
 	foreachArgImpl(arg, nil, &ArgCtx{parentStack: allocStack()}, f)
 }
 
-func ForRetArg(c *Call, f func(Arg, *ArgCtx)) {
-	ctx := &ArgCtx{}
-	if c.Ret != nil {
-		foreachArgImpl(c.Ret, nil, ctx, f)
-	}
-}
-
 func ForeachArg(c *Call, f func(Arg, *ArgCtx)) {
 	ctx := &ArgCtx{}
 	if c.Ret != nil {
