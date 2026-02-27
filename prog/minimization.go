@@ -434,7 +434,6 @@ func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
 func usesBF(call *Call, i int, c *Cache) *bloom.BloomFilter {
 	ret := c.UsesBFs[i]
 	if ret == nil {
-		// fmt.Fprintf(os.Stderr, "No BF found\n")
 		uses := usesCache(call, i, c)
 		bf := usesToNewBloom(uses)
 		c.UsesBFs[i] = bf
