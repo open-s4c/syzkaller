@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -27,7 +26,7 @@ var (
 	flagArch = flag.String("arch", runtime.GOARCH, "target arch")
 	flagProg = flag.String("prog", "", "file with program to convert (required)")
 
-	flagStrict = flag.Bool("strict", false, "parse input program in strict mode")
+	flagStrict      = flag.Bool("strict", false, "parse input program in strict mode")
 	flagDeserialize = flag.String("deserialize", "", "(Optional) directory to store deserialized programs")
 	flagMinCalls    = flag.Int("minCalls", 10, "minimum number of remaining syscalls after minimization")
 	flagTopCalls    = flag.Int("topCalls", 2, "number of most used usyscalls to be used for file name generation")
@@ -76,10 +75,10 @@ func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn []bool
 	return
 }
 
-func generateAllProgs(p *prog.Prog, threadTree []kv) (pF *prog.Prog) {
+func generateAllProgs(p *prog.Prog, threadList []int64) (pF *prog.Prog) {
 	numCalls := len(p.Calls)
 	processedCalls := make([]bool, numCalls)
-	processedCalls[numCalls - 1] = false
+	processedCalls[numCalls-1] = false
 	keepCalls := make([]bool, numCalls)
 	nonStartCalls := make([]bool, numCalls)
 	outPrefixesIdx := make(map[string]int)
@@ -92,18 +91,16 @@ func generateAllProgs(p *prog.Prog, threadTree []kv) (pF *prog.Prog) {
 	fmt.Fprintf(os.Stderr, "Number of syscalls before: %d\n", numCalls)
 
 	// go over all thread IDs in decreasing depth starting with the highest depth
-	for _, kv := range threadTree {
-        fmt.Printf("Working on TID %d, depth %d\n", kv.Key, kv.Value)
+	for _, tid := range threadList {
+		fmt.Printf("Working on TID %d\n", tid)
 
 		for i := numCalls - 1; i > 0; {
 			// if i%1000 == 0 {
 			// 	fmt.Fprintf(os.Stderr, "(%d/%d) Finished (cache: %d entries) @ %s.\n", i, numCalls, len(c.Uses), time.Now())
 			// }
-			if !nonStartCalls[i] && p.Calls[i].StraceTid == kv.Key {
+			if !nonStartCalls[i] && p.Calls[i].StraceTid == tid {
 				pF, processedCalls, keepCalls = generateMinimizedProg(p, i, processedCalls, c)
 				nonStartCalls = prog.Sliceor(prog.Sliceor(processedCalls, keepCalls), nonStartCalls)
-				// fmt.Fprintf(os.Stderr, "Extracted length %d Calls:\n", len(pF.Calls))
-				// fmt.Fprintf(os.Stderr, "%##v\n", pF.Calls)
 
 				if len(pF.Calls) >= *flagMinCalls {
 					fmt.Fprintf(os.Stderr, "(%d/%d) Number of syscalls after: %d\n", i, len(p.Calls), len(pF.Calls))
@@ -120,12 +117,14 @@ func generateAllProgs(p *prog.Prog, threadTree []kv) (pF *prog.Prog) {
 					outPrefix := strings.Join(strings.Split(progBase, "_")[:prefixLen], "_") + "_" + strings.Join(topNames, "_")
 					_, ok := outPrefixesIdx[outPrefix]
 					if !ok {
-						outPrefixesIdx[outPrefix]=0
+						outPrefixesIdx[outPrefix] = 0
 					} else {
 						outPrefixesIdx[outPrefix]++
 					}
 
 					saveProg2File(pF, outPrefix, outPrefixesIdx[outPrefix])
+				} else {
+					fmt.Fprintf(os.Stderr, "(%d/%d) Number of syscalls after: %d, not saving the file.\n", i, len(p.Calls), len(pF.Calls))
 				}
 			}
 			// p.RemoveCall(i)
@@ -197,63 +196,19 @@ func mapsNewInRightAny(list map[any]bool, list1 map[any]bool) bool {
 }
 
 // a map from TID to clone depth
-type ThreadDepth map[int64]int64
+type ThreadSet map[int64]bool
 
-func addTid(tt ThreadDepth, tid int64, depth int64) {
-	if tt == nil {
-		panic("Cannot add child to nil Threat Tree")
-	}
-
-	d, ok := tt[tid]
-	if !ok {
-		tt[tid] = depth
-		return
-	}
-
-	if d != depth {
-		panic(fmt.Sprintf("TID %d already exists at depth %d. Trying to add at depth %d\n", tid, d, depth))
-	}
-}
-
-func addChild(tt ThreadDepth, parent int64, child int64) {
-	d, ok := tt[parent]
-	if !ok {
-		panic(fmt.Sprintf("Parent TID %d not found in thread tree\n", parent))
-	}
-	childDepth := d+1
-	addTid(tt, child, childDepth)
-}
-
-func buildThreadTree(p *prog.Prog) ThreadDepth {
-	tt := make(ThreadDepth)
-	addTid(tt, p.Calls[0].StraceTid, 0)
+func buildThreadList(p *prog.Prog) []int64 {
+	tt := make(ThreadSet)
+	tl := make([]int64, 0)
 
 	for _, c := range p.Calls {
-		if c.Meta.CallName == "clone" || c.Meta.CallName == "clone3" {
-			parentTid := c.StraceTid
-			childTid := c.StraceRetVal
-			addChild(tt, parentTid, childTid)
-		}
+		tt[c.StraceTid] = true
 	}
-	return tt
-}
-
-type kv struct {
-	Key   int64
-	Value int64
-}
-
-func sortThreadTree(tt ThreadDepth) []kv {
-	var ss []kv
-    for k, v := range tt {
-        ss = append(ss, kv{k, v})
-    }
-
-	sort.Slice(ss, func(i, j int) bool {
-        return ss[i].Value > ss[j].Value
-    })
-
-	return ss
+	for t, _ := range tt {
+		tl = append(tl, t)
+	}
+	return tl
 }
 
 func main() {
@@ -261,8 +216,7 @@ func main() {
 
 	p := readProg()
 
-	threadTree := buildThreadTree(p)
-	threads := sortThreadTree(threadTree)
+	threads := buildThreadList(p)
 
 	generateAllProgs(p, threads)
 }
