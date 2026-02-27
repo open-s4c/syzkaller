@@ -71,12 +71,12 @@ func predTrue(*prog.Prog, int, *stat.Val, string) bool {
 	return true
 }
 
-func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn []bool, c *prog.Cache, resChanges []int) (pOut *prog.Prog, processedCalls []bool, keepCalls []bool) {
-	pOut, processedCalls, keepCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, c, resChanges)
+func generateMinimizedProg(p *prog.Prog, callIndex0 int, processedCallsIn []bool, c *prog.Cache, ) (pOut *prog.Prog, processedCalls []bool, keepCalls []bool) {
+	pOut, processedCalls, keepCalls = prog.RemoveUnrelatedCallsFast(p, callIndex0, predTrue, processedCallsIn, c)
 	return
 }
 
-func generateAllProgs(p *prog.Prog, resChanges []int, threadTree []kv) (pF *prog.Prog) {
+func generateAllProgs(p *prog.Prog, threadTree []kv) (pF *prog.Prog) {
 	numCalls := len(p.Calls)
 	processedCalls := make([]bool, numCalls)
 	processedCalls[numCalls - 1] = false
@@ -100,8 +100,7 @@ func generateAllProgs(p *prog.Prog, resChanges []int, threadTree []kv) (pF *prog
 			// 	fmt.Fprintf(os.Stderr, "(%d/%d) Finished (cache: %d entries) @ %s.\n", i, numCalls, len(c.Uses), time.Now())
 			// }
 			if !nonStartCalls[i] && p.Calls[i].StraceTid == kv.Key {
-				// fmt.Fprintf(os.Stderr, "Working on index %d\n", i)
-				pF, processedCalls, keepCalls = generateMinimizedProg(p, i, processedCalls, c, resChanges)
+				pF, processedCalls, keepCalls = generateMinimizedProg(p, i, processedCalls, c)
 				nonStartCalls = prog.Sliceor(prog.Sliceor(processedCalls, keepCalls), nonStartCalls)
 				// fmt.Fprintf(os.Stderr, "Extracted length %d Calls:\n", len(pF.Calls))
 				// fmt.Fprintf(os.Stderr, "%##v\n", pF.Calls)
@@ -197,22 +196,6 @@ func mapsNewInRightAny(list map[any]bool, list1 map[any]bool) bool {
 	return false
 }
 
-// returns a slice with indices in increasing order
-// and index is added to the slice if a new resource was found at this index
-func generateResChanges(p *prog.Prog) []int {
-	resSlice := make([]int, 0)
-	lastResources := make(map[any](bool))
-	for idx, call := range p.Calls {
-		nextResources := extractResources(call)
-		newELem := mapsNewInRightAny(lastResources, nextResources)
-		if newELem {
-			resSlice = append(resSlice, idx)
-		}
-		lastResources = nextResources
-	}
-	return resSlice
-}
-
 // a map from TID to clone depth
 type ThreadDepth map[int64]int64
 
@@ -255,17 +238,6 @@ func buildThreadTree(p *prog.Prog) ThreadDepth {
 	return tt
 }
 
-func checks(p *prog.Prog) {
-	for _, c := range p.Calls {
-		if c.Meta.CallName == "io_getevents" {
-			for idx, arg := range c.Args {
-				fmt.Fprintf(os.Stderr, "Argument %d: %#v\n", idx, arg)
-			}
-		}
-	}
-}
-
-
 type kv struct {
 	Key   int64
 	Value int64
@@ -289,15 +261,8 @@ func main() {
 
 	p := readProg()
 
-	// checks(p)
-	// panic("TEST STOP\n")
-
 	threadTree := buildThreadTree(p)
 	threads := sortThreadTree(threadTree)
 
-	fmt.Fprintf(os.Stderr, "Thread dephts:\n%#v\n", threads)
-
-	resChanges := generateResChanges(p)
-
-	generateAllProgs(p, resChanges, threads)
+	generateAllProgs(p, threads)
 }

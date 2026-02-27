@@ -144,7 +144,7 @@ func RemoveUnrelatedCalls(p0 *Prog, callIndex0 int, pred minimizePred, processed
 	return p0, callIndex0, processedCalls
 }
 
-func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool, []bool) {
+func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool, []bool) {
 	var processedCalls []bool
 	var keepCalls []bool
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
@@ -160,7 +160,7 @@ func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	}
 
 	if callIndex0 != -1 {
-		p0, processedCalls, keepCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, c, resChanges)
+		p0, processedCalls, keepCalls = removeUnrelatedCallsInfoFast(p0, callIndex0, pred, processedCallsIn, c)
 	}
 
 	return p0, processedCalls, keepCalls
@@ -236,9 +236,9 @@ func cardinality(a []bool) int {
 	return ret
 }
 
-func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache, resChanges []int) (*Prog, []bool, []bool) {
-	keepCalls, removeCalls, resChanges := relatedCallsFullThread(p0, callIndex0, c, resChanges, processedCallsIn)
-	// keepCalls, removeCalls := relatedCallsFullProgram(p0, callIndex0, c, resChanges, processedCallsIn)
+func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, pred minimizePred, processedCallsIn []bool, c *Cache) (*Prog, []bool, []bool) {
+	keepCalls, removeCalls := relatedCallsFullThread(p0, callIndex0, c, processedCallsIn)
+	// keepCalls, removeCalls := relatedCallsFullProgram(p0, callIndex0, c, processedCallsIn)
 
 	if len(p0.Calls)-cardinality(keepCalls) < 3 {
 		return p0, processedCallsIn, keepCalls
@@ -329,20 +329,16 @@ func checkAllowedCalls(call *Call) bool {
 	return false
 }
 
-func relatedCallsFullProgram(p0 *Prog, callIndex0 int, c *Cache, resChanges []int, processedCallsIn []bool) ([]bool, []bool) {
+func relatedCallsFullProgram(p0 *Prog, callIndex0 int, c *Cache, processedCallsIn []bool) ([]bool, []bool) {
 	keepCalls := make([]bool, len(p0.Calls))
 	keepCalls[callIndex0] = true
 	usedBF := usesBF(p0.Calls[callIndex0], callIndex0, c)
 	used := usesCache(p0.Calls[callIndex0], callIndex0, c)
 
-	nextResChange := 0
-	nextResChangeIdx := 0
 	numCalls := len(p0.Calls)
 
 	for {
 		n := len(used)
-		nextResChange = 0
-		nextResChangeIdx = 0
 		for i := 0; i < numCalls; i++ {
 			if keepCalls[i] || processedCallsIn[i] {
 				continue
@@ -360,36 +356,16 @@ func relatedCallsFullProgram(p0 *Prog, callIndex0 int, c *Cache, resChanges []in
 						used[what] = true
 					}
 				}
-			} else {
-				// jump up to next index with new FDs
-				for len(resChanges) > nextResChangeIdx+1 && resChanges[nextResChangeIdx] <= i {
-					nextResChangeIdx++
-					nextResChange = resChanges[nextResChangeIdx]
-				}
-				if nextResChange > i {
-					i = nextResChange - 1
-				}
 			}
 		}
 		if n == len(used) {
 			removeCalls := keepCalls
 			return keepCalls, removeCalls
 		}
-		// // update resChanges to remove keepCalls && processedCallsIn
-		numResChanges := len(resChanges)
-		for i := numResChanges - 1; i >= 0; i-- {
-			if processedCallsIn[resChanges[i]] || keepCalls[resChanges[i]] {
-				if i == numResChanges-1 {
-					resChanges = resChanges[:i]
-				} else {
-					resChanges = append(resChanges[:i], resChanges[i+1:]...)
-				}
-			}
-		}
 	}
 }
 
-func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int, processedCallsIn []bool) ([]bool, []bool, []int) {
+func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, processedCallsIn []bool) ([]bool, []bool) {
 	keepCalls := make([]bool, len(p0.Calls))
 	keepCalls[callIndex0] = true
 	removeCalls := make([]bool, len(p0.Calls))
@@ -402,15 +378,10 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int
 	if retBF(p0.Calls[callIndex0], callIndex0, c).BitSet().None() {
 		removeCalls[callIndex0] = true
 	}
-
-	// nextResChange := 0
-	// nextResChangeIdx := 0
 	numCalls := len(p0.Calls)
 
 	for {
 		n := len(used)
-		// nextResChange = 0
-		// nextResChangeIdx = 0
 		for i := 0; i < numCalls; i++ {
 			if keepCalls[i] || processedCallsIn[i] {
 				continue
@@ -421,26 +392,22 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int
 			var used1 map[any]bool
 			var usedBF1 *bloom.BloomFilter
 			if call.StraceTid == tid || checkAllowedCalls(call) {
-				// fmt.Fprintf(os.Stderr, "Found a matching thread %d (idx %d), (syscall %s)\n", tid, i, p0.Calls[i].Meta.CallName)
 				usedBF1 = usesBF(call, i, c)
 			} else {
 				usedBF1 = retBF(call, i, c)
 			}
 
 			if intersectBFs(usedBF, usedBF1) {
-				// fmt.Fprintf(os.Stderr, "Found a BF intersection on thread %d (idx %d), (syscall %s)\n", call.StraceTid, i, p0.Calls[i].Meta.CallName)
 				if call.StraceTid == tid || checkAllowedCalls(call) {
 					used1 = usesCache(call, i, c)
 				} else {
 					used1 = retCache(call, i, c)
 				}
 				if intersects(used, used1) {
-					// fmt.Fprintf(os.Stderr, "Found an intersection %d syscall %s\n", i, p0.Calls[i].Meta.CallName)
 					keepCalls[i] = true
 					// dont remove setup calls from parents, they might be necessary to setup for a different thread as well
 					// also dont remove setup calls from this thread, as sibblings might use a shared resource (mysql, file descriptor)
 					if call.StraceTid == tid && retBF(call, i, c).BitSet().None() && !checkAllowedCalls(call) {
-						// fmt.Fprintf(os.Stderr, "Removing syscall with index %d\n", i)
 						removeCalls[i] = true
 					}
 
@@ -453,32 +420,11 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int
 						used[what] = true
 					}
 				}
-			} 
-			// else {
-			// 	// jump up to next index with new FDs
-			// 	for len(resChanges) > nextResChangeIdx+1 && resChanges[nextResChangeIdx] <= i {
-			// 		nextResChangeIdx++
-			// 		nextResChange = resChanges[nextResChangeIdx]
-			// 	}
-			// 	if nextResChange > i {
-			// 		i = nextResChange - 1
-			// 	}
-			// }
+			}
 		}
 		if n == len(used) {
-			return keepCalls, removeCalls, resChanges
+			return keepCalls, removeCalls
 		}
-		// // // update resChanges to remove keepCalls && processedCallsIn
-		// numResChanges := len(resChanges)
-		// for i := numResChanges - 1; i >= 0; i-- {
-		// 	if processedCallsIn[resChanges[i]] || keepCalls[resChanges[i]] {
-		// 		if i == numResChanges-1 {
-		// 			resChanges = resChanges[:i]
-		// 		} else {
-		// 			resChanges = append(resChanges[:i], resChanges[i+1:]...)
-		// 		}
-		// 	}
-		// }
 	}
 }
 
