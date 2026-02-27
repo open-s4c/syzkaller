@@ -422,7 +422,6 @@ func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
 		case *ResultArg:
 			res := ptrToBA(what)
 			bf.Add(res)
-			// fmt.Fprintf(os.Stderr, "Convert resource ResultArg %#v to bloom (%s).\n", what, string(res))
 		case string:
 			// fmt.Fprintf(os.Stderr, "Convert resource string %s to bloom.\n", what)
 			bf.AddString(what)
