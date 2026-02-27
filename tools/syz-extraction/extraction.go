@@ -250,6 +250,17 @@ func buildThreadTree(p *prog.Prog) ThreadDepth {
 	return tt
 }
 
+func checks(p *prog.Prog) {
+	for _, c := range p.Calls {
+		if c.Meta.CallName == "io_getevents" {
+			for idx, arg := range c.Args {
+				fmt.Fprintf(os.Stderr, "Argument %d: %#v\n", idx, arg)
+			}
+		}
+	}
+}
+
+
 type kv struct {
 	Key   int64
 	Value int64
