@@ -236,9 +236,6 @@ func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, processedCallsIn []b
 	if len(p0.Calls)-cardinality(keepCalls) < 3 {
 		return p0, processedCallsIn, keepCalls
 	}
-
-	// fmt.Fprintf(os.Stderr, "Cloning with filter of length %d\n", cardinality(keepCalls))
-
 	p := p0.CloneFilter(keepCalls)
 
 	processedCalls := Sliceor(processedCallsIn, removeCalls)
