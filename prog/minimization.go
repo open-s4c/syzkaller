@@ -150,13 +150,6 @@ func RemoveUnrelatedCallsFast(p0 *Prog, callIndex0 int, pred minimizePred, proce
 	if callIndex0 >= 0 && callIndex0+2 < len(p0.Calls) {
 		// It's frequently the case that all subsequent calls were not necessary.
 		// Try to drop them all at once.
-		// p := p0.CloneUpTo(callIndex0)
-		// for i := len(p0.Calls) - 1; i > callIndex0; i-- {
-		// 	p.RemoveCall(i)
-		// }
-		// if pred(p, callIndex0, statMinRemoveCall, "trailing calls") {
-		// 	p0 = p
-		// }
 	}
 
 	if callIndex0 != -1 {
