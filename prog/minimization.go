@@ -300,6 +300,35 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 	}
 }
 
+func checkAllowedCalls(call *Call) bool {
+	allowed := []string {"accept",
+						"bind",
+						"connect",
+						"dup",
+						"dup3",
+						"epoll_create1",
+						"epoll_pwait",
+						"eventfd2",
+						"fallocate",
+						"fcntl",
+						"ioctl",
+						"listen",
+						"lseek",
+						"pipe2",
+						"ppoll",
+						"setsockopt",
+						"socket",
+						"umask",
+						"uname",
+						}
+	for _,allowedName := range allowed {
+		if call.Meta.CallName == allowedName {
+			return true
+		}
+	}
+	return false
+}
+
 func relatedCallsFullProgram(p0 *Prog, callIndex0 int, c *Cache, resChanges []int, processedCallsIn []bool) ([]bool, []bool) {
 	keepCalls := make([]bool, len(p0.Calls))
 	keepCalls[callIndex0] = true
@@ -391,7 +420,7 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int
 
 			var used1 map[any]bool
 			var usedBF1 *bloom.BloomFilter
-			if call.StraceTid == tid {
+			if call.StraceTid == tid || checkAllowedCalls(call) {
 				// fmt.Fprintf(os.Stderr, "Found a matching thread %d (idx %d), (syscall %s)\n", tid, i, p0.Calls[i].Meta.CallName)
 				usedBF1 = usesBF(call, i, c)
 			} else {
@@ -400,7 +429,7 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int
 
 			if intersectBFs(usedBF, usedBF1) {
 				// fmt.Fprintf(os.Stderr, "Found a BF intersection on thread %d (idx %d), (syscall %s)\n", call.StraceTid, i, p0.Calls[i].Meta.CallName)
-				if call.StraceTid == tid {
+				if call.StraceTid == tid || checkAllowedCalls(call) {
 					used1 = usesCache(call, i, c)
 				} else {
 					used1 = retCache(call, i, c)
@@ -410,7 +439,7 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int
 					keepCalls[i] = true
 					// dont remove setup calls from parents, they might be necessary to setup for a different thread as well
 					// also dont remove setup calls from this thread, as sibblings might use a shared resource (mysql, file descriptor)
-					if call.StraceTid == tid && retBF(call, i, c).BitSet().None() {
+					if call.StraceTid == tid && retBF(call, i, c).BitSet().None() && !checkAllowedCalls(call) {
 						// fmt.Fprintf(os.Stderr, "Removing syscall with index %d\n", i)
 						removeCalls[i] = true
 					}
