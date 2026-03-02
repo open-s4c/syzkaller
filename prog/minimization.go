@@ -33,10 +33,10 @@ var (
 )
 
 type Cache struct {
-	Uses []map[any]bool
-	Rets []map[any]bool
-	UsesBFs  []*bloom.BloomFilter
-	RetsBFs  []*bloom.BloomFilter
+	Uses    []map[any]bool
+	Rets    []map[any]bool
+	UsesBFs []*bloom.BloomFilter
+	RetsBFs []*bloom.BloomFilter
 }
 
 type MinimizeMode int
@@ -291,26 +291,26 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 }
 
 func checkAllowedCalls(call *Call) bool {
-	allowed := []string {"bind",
-						"connect",
-						"dup",
-						"dup3",
-						"epoll_create1",
-						"epoll_pwait",
-						"eventfd2",
-						"fallocate",
-						"fcntl",
-						"ioctl",
-						"listen",
-						"lseek",
-						"pipe2",
-						"ppoll",
-						"setsockopt",
-						"socket",
-						"umask",
-						"uname",
-						}
-	for _,allowedName := range allowed {
+	allowed := []string{"bind",
+		"connect",
+		"dup",
+		"dup3",
+		"epoll_create1",
+		"epoll_pwait",
+		"eventfd2",
+		"fallocate",
+		"fcntl",
+		"ioctl",
+		"listen",
+		"lseek",
+		"pipe2",
+		"ppoll",
+		"setsockopt",
+		"socket",
+		"umask",
+		"uname",
+	}
+	for _, allowedName := range allowed {
 		if call.Meta.CallName == allowedName {
 			return true
 		}
@@ -507,7 +507,6 @@ func usesRet(call *Call) map[any]bool {
 	})
 	return used
 }
-
 
 func uses(call *Call) map[any]bool {
 	used := make(map[any]bool)
