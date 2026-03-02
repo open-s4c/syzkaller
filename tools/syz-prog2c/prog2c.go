@@ -265,43 +265,6 @@ func sanitizeReadlinkat(call *prog.Call, subdirs map[string](bool)) map[string](
 	return subdirs
 }
 
-func sanitizeBindUnix(call *prog.Call, subdirs map[string](bool), unixsockets map[string](bool)) (map[string](bool), map[string](bool)) {
-	a1 := call.Args[1].(*prog.PointerArg)
-	// path argument
-	var d1 []prog.Arg
-	switch a1.Res.(type) {
-	case *prog.UnionArg:
-		d1 = a1.Res.(*prog.UnionArg).Option.(*prog.GroupArg).Inner
-	case *prog.GroupArg:
-		d1 = a1.Res.(*prog.GroupArg).Inner
-	default:
-		panic("Error detecting unix bind path argument type")
-	}
-
-	sockType := d1[0].(*prog.ConstArg).Val
-	path := d1[1].(*prog.DataArg).Data()
-
-	fmt.Fprintf(os.Stderr, "Unixsocket Path: %s\n", string(path))
-
-	if sockType != syscall.AF_UNIX {
-		panic("Expected type AF_UNIX for bind$unix sockaddr")
-	}
-	ret, subdirPath := sanitizePath(path)
-
-	fmt.Fprintf(os.Stderr, "Unixsocket Path (sanitized): %s\n", string(ret))
-
-	// set sanitized path
-	d1[1].(*prog.DataArg).SetData(ret)
-
-	// keep subdirectories to be created before program execution
-	subdirs[subdirPath] = true
-
-	// keep path to unix socket for whatever reason
-	unixsockets[string(ret)] = true
-
-	return subdirs, unixsockets
-}
-
 func sanitizeBindInet(call *prog.Call) {
 	a1 := call.Args[1].(*prog.PointerArg)
 	// path argument
@@ -408,8 +371,6 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
 		case "connect$inet":
 			sanitizeConnect(call)
-		case "bind$unix":
-			sanitizeBindUnix(call, subdirs, unixsockets)
 		case "bind$inet":
 			sanitizeBindInet(call)
 		case "bind$inet6":
