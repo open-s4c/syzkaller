@@ -20,3 +20,24 @@ jobs:
           make
           cd tools/${{ matrix.tool }}
           go build
+    CSB-Test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/setup-go@v5
+          with:
+            go-version: '1.25'
+        - name: run bm-generator from CSB
+          run : |
+          git clone https://github.com/open-s4c/csb.git
+          cd csb
+          git submodule update --init
+          cd deps/syzkaller/
+          git fetch
+          echo "checking out ${{ github.ref_name }}"
+          git checkout ${{ github.ref_name }}
+          cd ../../
+          go env -w GOBIN=$HOME/.local/bin
+          cd bm-generator
+          ./test.sh
+
+
