@@ -291,8 +291,7 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 }
 
 func checkAllowedCalls(call *Call) bool {
-	allowed := []string {"accept",
-						"bind",
+	allowed := []string {"bind",
 						"connect",
 						"dup",
 						"dup3",
