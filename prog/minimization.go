@@ -6,6 +6,7 @@ package prog
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"reflect"
 
 	"github.com/bits-and-blooms/bloom/v3"
@@ -236,6 +237,9 @@ func removeUnrelatedCallsInfoFast(p0 *Prog, callIndex0 int, processedCallsIn []b
 	if len(p0.Calls)-cardinality(keepCalls) < 3 {
 		return p0, processedCallsIn, keepCalls
 	}
+
+	fmt.Fprintf(os.Stderr, "Cloning with filter of length %d\n", cardinality(keepCalls))
+
 	p := p0.CloneFilter(keepCalls)
 
 	processedCalls := Sliceor(processedCallsIn, removeCalls)
@@ -420,6 +424,90 @@ func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, processedCallsIn
 	}
 }
 
+func relatedCallsFullThread(p0 *Prog, callIndex0 int, c *Cache, resChanges []int, processedCallsIn []bool) ([]bool, []bool, []int) {
+	keepCalls := make([]bool, len(p0.Calls))
+	keepCalls[callIndex0] = true
+	removeCalls := make([]bool, len(p0.Calls))
+	removeCalls[callIndex0] = true
+	usedBF := usesBF(p0.Calls[callIndex0], callIndex0, c)
+	used := usesCache(p0.Calls[callIndex0], callIndex0, c)
+	tid := p0.Calls[callIndex0].StraceTid
+
+	// nextResChange := 0
+	// nextResChangeIdx := 0
+	numCalls := len(p0.Calls)
+
+	for {
+		n := len(used)
+		// nextResChange = 0
+		// nextResChangeIdx = 0
+		for i := 0; i < numCalls; i++ {
+			if keepCalls[i] || processedCallsIn[i] {
+				continue
+			}
+
+			call := p0.Calls[i]
+
+			var used1 map[any]bool
+			var usedBF1 *bloom.BloomFilter
+			if call.StraceTid == tid {
+				usedBF1 = usesBF(call, i, c)
+			} else {
+				usedBF1 = retBF(call, i, c)
+			}
+
+			if intersectBFs(usedBF, usedBF1) {
+				if call.StraceTid == tid {
+					used1 = usesCache(call, i, c)
+				} else {
+					used1 = retCache(call, i, c)
+				}
+				if intersects(used, used1) {
+					fmt.Fprintf(os.Stderr, "Found an intersection %d syscall %s\n", i, p0.Calls[i].Meta.CallName)
+					keepCalls[i] = true
+					// dont remove setup calls from parents, they might be necessary to setup for a different thread as well
+					if call.StraceTid == tid {
+						removeCalls[i] = true
+					}
+
+					// actually include all resources for this syscall so we get dependent resource creation as well
+					usedBF1 = usesBF(call, i, c)
+					used1 = usesCache(call, i, c)
+
+					usedBF.Merge(usedBF1)
+					for what := range used1 {
+						used[what] = true
+					}
+				}
+			} 
+			// else {
+			// 	// jump up to next index with new FDs
+			// 	for len(resChanges) > nextResChangeIdx+1 && resChanges[nextResChangeIdx] <= i {
+			// 		nextResChangeIdx++
+			// 		nextResChange = resChanges[nextResChangeIdx]
+			// 	}
+			// 	if nextResChange > i {
+			// 		i = nextResChange - 1
+			// 	}
+			// }
+		}
+		if n == len(used) {
+			return keepCalls, removeCalls, resChanges
+		}
+		// // // update resChanges to remove keepCalls && processedCallsIn
+		// numResChanges := len(resChanges)
+		// for i := numResChanges - 1; i >= 0; i-- {
+		// 	if processedCallsIn[resChanges[i]] || keepCalls[resChanges[i]] {
+		// 		if i == numResChanges-1 {
+		// 			resChanges = resChanges[:i]
+		// 		} else {
+		// 			resChanges = append(resChanges[:i], resChanges[i+1:]...)
+		// 		}
+		// 	}
+		// }
+	}
+}
+
 func usesToNewBloom(uses map[any](bool)) *bloom.BloomFilter {
 	bf := bloom.NewWithEstimates(500, 1)
 	for what := range uses {
@@ -453,6 +541,17 @@ func retBF(call *Call, i int, c *Cache) *bloom.BloomFilter {
 		uses := retCache(call, i, c)
 		bf := usesToNewBloom(uses)
 		c.RetsBFs[i] = bf
+		ret = bf
+	}
+	return ret
+}
+
+func retBF(call *Call, i int, c *Cache) *bloom.BloomFilter {
+	ret := c.Bfs[i]
+	if ret == nil {
+		uses := retCache(call, i, c)
+		bf := usesToNewBloom(uses)
+		c.Bfs[i] = bf
 		ret = bf
 	}
 	return ret
