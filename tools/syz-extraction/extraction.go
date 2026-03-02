@@ -195,7 +195,7 @@ func buildThreadList(p *prog.Prog) []int64 {
 	for _, c := range p.Calls {
 		tt[c.StraceTid] = true
 	}
-	for t, _ := range tt {
+	for t := range tt {
 		tl = append(tl, t)
 	}
 	return tl
