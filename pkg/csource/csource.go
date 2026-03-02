@@ -493,8 +493,6 @@ func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool) ([]
 			arg1 := call.Args[1]
 			msghdr := arg1.(*prog.PointerArg).Res.(*prog.GroupArg).Inner
 
-			// fmt.Fprintf(os.Stderr, "Msghdr [%d] %#v\n", i, msghdr)
-
 			// arg3 is array of iovec *msg_iov
 			data3 := msghdr[3].(*prog.PointerArg).Res.(*prog.GroupArg).Inner
 
@@ -505,22 +503,9 @@ func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool) ([]
 			for idx, msg := range data3 {
 				iov := msg.(*prog.GroupArg).Inner
 				msglen := iov[1].(*prog.ConstArg).Val
-				// fmt.Fprintf(os.Stderr, "msglen: %d iov: %#v\n", msglen, iov)
 				totalLength += msglen
 				fmt.Fprintf(os.Stderr, "Message %d (%s) size: %d\n", idx, call.Meta.CallName, msglen)
 			}
-
-			// fmt.Fprintf(os.Stderr, "[%d]", i)
-			// fmt.Fprintf(os.Stderr, " data0: %#v", data0)
-			// fmt.Fprintf(os.Stderr, " data1: %#v", data1)
-			// fmt.Fprintf(os.Stderr, " data2: %#v", data2)
-			// fmt.Fprintf(os.Stderr, " data3: %#v", data3)
-			// fmt.Fprintf(os.Stderr, " data4: %#v", data4)
-			// fmt.Fprintf(os.Stderr, " data5: %#v", data5)
-			// fmt.Fprintf(os.Stderr, " data6: %#v", data6)
-			// fmt.Fprintf(os.Stderr, " data7: %#v", data7)
-			// fmt.Fprintf(os.Stderr, " data8: %#v", data8)
-			// fmt.Fprintf(os.Stderr, "\n")
 
 			msgSizes[i] = totalLength
 		}
@@ -595,7 +580,6 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 
 			arg2 := call.Args[2]
 			size := arg2.(prog.ExecArgConst).Value
-			// fmt.Fprintf(os.Stderr, "receive size: %d\n", size)
 			AddToNetOps(fdRes, NetRead, size)
 		}
 
@@ -612,7 +596,6 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 
 			arg2 := call.Args[2]
 			size := arg2.(prog.ExecArgConst).Value
-			// fmt.Fprintf(os.Stderr, "send size: %d\n", size)
 			AddToNetOps(fdRes, NetWrite, size)
 		}
 
@@ -812,7 +795,6 @@ func (ctx *context) fmtCallBody(call prog.ExecCall) string {
 			if arg.Format != prog.FormatNative && arg.Format != prog.FormatBigEndian {
 				panic("string format in syscall argument")
 			}
-			// fmt.Fprintf(os.Stderr, "Arg %d: %v\n", i, .Type)
 			com := ctx.argComment(call.Meta.Args[i], arg)
 
 			PTR_OFFSET_STR := ""
