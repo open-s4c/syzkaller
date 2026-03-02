@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -205,6 +206,66 @@ func buildThreadList(p *prog.Prog) []int64 {
 		tl = append(tl, t)
 	}
 	return tl
+}
+
+// a map from TID to clone depth
+type ThreadDepth map[int64]int64
+
+func addTid(tt ThreadDepth, tid int64, depth int64) {
+	if tt == nil {
+		panic("Cannot add child to nil Threat Tree")
+	}
+
+	d, ok := tt[tid]
+	if !ok {
+		tt[tid] = depth
+		return
+	}
+
+	if d != depth {
+		panic(fmt.Sprintf("TID %d already exists at depth %d. Trying to add at depth %d\n", tid, d, depth))
+	}
+}
+
+func addChild(tt ThreadDepth, parent int64, child int64) {
+	d, ok := tt[parent]
+	if !ok {
+		panic(fmt.Sprintf("Parent TID %d not found in thread tree\n", parent))
+	}
+	childDepth := d+1
+	addTid(tt, child, childDepth)
+}
+
+func buildThreadTree(p *prog.Prog) ThreadDepth {
+	tt := make(ThreadDepth)
+	addTid(tt, p.Calls[0].StraceTid, 0)
+
+	for _, c := range p.Calls {
+		if c.Meta.CallName == "clone" || c.Meta.CallName == "clone3" {
+			parentTid := c.StraceTid
+			childTid := c.StraceRetVal
+			addChild(tt, parentTid, childTid)
+		}
+	}
+	return tt
+}
+
+type kv struct {
+	Key   int64
+	Value int64
+}
+
+func sortThreadTree(tt ThreadDepth) []kv {
+	var ss []kv
+    for k, v := range tt {
+        ss = append(ss, kv{k, v})
+    }
+
+	sort.Slice(ss, func(i, j int) bool {
+        return ss[i].Value > ss[j].Value
+    })
+
+	return ss
 }
 
 func main() {
