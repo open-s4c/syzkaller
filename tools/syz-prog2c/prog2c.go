@@ -440,27 +440,6 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 	return p, subdirs, filesizes, filemap, maxWriteSize
 }
 
-// returns limited program with regard to having a maximum number of *flagNumInvoc invocations per syscall
-func limitProgram(p *prog.Prog) *prog.Prog {
-	pLim := p.Clone()
-	pLim.Calls = nil
-	invocations := make(map[string](int))
-	for _, call := range p.Calls {
-		callName := call.Meta.Name
-		_, ok := invocations[callName]
-		if !ok {
-			invocations[callName] = 1
-		} else {
-			invocations[callName]++
-		}
-
-		if invocations[callName] <= *flagNumInvoc {
-			pLim.Calls = append(pLim.Calls, call)
-		}
-	}
-	return pLim
-}
-
 func main() {
 	flag.Usage = func() {
 		flag.PrintDefaults()
