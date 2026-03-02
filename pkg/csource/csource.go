@@ -37,9 +37,87 @@ import (
 	"github.com/google/syzkaller/sys/targets"
 )
 
+type NetOp int
+
+const (
+	NetRead NetOp = iota
+	NetWrite
+)
+
+type NetOpSize struct {
+	Op   NetOp
+	Num  uint64
+	Size uint64
+}
+
 var (
 	missedFDResources = make(map[uint64](bool))
+	connectFDs        = make(map[uint64](bool))
+	readFDSizes       = make(map[uint64](uint64))
+	NetOpsFDs         = make(map[uint64]([]NetOpSize))
 )
+
+func AddToNetOps(res uint64, op NetOp, size uint64) {
+	netops, ok := NetOpsFDs[res]
+
+	// no operation for this file descriptor recorded yet, initialize
+	if !ok {
+		NetOpsFDs[res] = make([]NetOpSize, 0)
+		netops = NetOpsFDs[res]
+	}
+
+	// empty list of operations, or current operation is write -> append
+	if len(netops) == 0 || op == NetWrite {
+		nosNew := NetOpSize{op, 1, size}
+		netops = append(netops, nosNew)
+		NetOpsFDs[res] = netops
+		return
+	}
+
+	// op is Read
+	nosLast := netops[len(netops)-1]
+	if nosLast.Op == NetWrite {
+		nosNew := NetOpSize{op, 1, size}
+		netops = append(netops, nosNew)
+		NetOpsFDs[res] = netops
+		return
+	}
+
+	// Last op was also Read, combine into total
+	nosNew := NetOpSize{op, nosLast.Num + 1, nosLast.Size + size}
+	netops[len(netops)-1] = nosNew
+	NetOpsFDs[res] = netops
+}
+
+var netOpName = map[NetOp]string{
+	NetRead:  "r",
+	NetWrite: "w",
+}
+
+func (no NetOp) String() string {
+	return netOpName[no]
+}
+
+func (nos NetOpSize) String() string {
+	return strconv.FormatUint(nos.Num, 10) + netOpName[nos.Op] + strconv.FormatUint(nos.Size, 10)
+}
+
+func NetOpsString(res uint64) string {
+	netops, ok := NetOpsFDs[res]
+	var netopstring string
+	// no operation for this file descriptor recorded yet, initialize
+	if !ok {
+		return ""
+	}
+
+	for idx, nos := range netops {
+		if idx != 0 {
+			netopstring += "-"
+		}
+		netopstring += nos.String()
+	}
+	return netopstring
+}
 
 // Write generates C source for program p based on the provided options opt.
 func Write(p *prog.Prog, opts Options) ([]byte, error) {
@@ -262,6 +340,19 @@ func (ctx *context) generateSource() ([]byte, error) {
 		header += "#define MMAP_OFFSET " + fmt.Sprintf("0x%x", ctx.target.DataOffset) + "ul\n"
 		header += "#define MMAP_LENGTH " + fmt.Sprintf("0x%x", ctx.target.NumPages*ctx.target.PageSize) + "ul\n"
 		header += "const static uint64_t UNIQUE_VAR(maxWriteBufferSize) = " + fmt.Sprintf("%d", ctx.opts.MaxWriteSize) + "ul;\n"
+
+		numNetRes := len(NetOpsFDs)
+
+		idx := 0
+		header += "const char* UNIQUE_VAR(netops)[" + fmt.Sprintf("%d", numNetRes) + "] = {"
+		for res := range NetOpsFDs {
+			if idx > 0 {
+				header += ", "
+			}
+			header += "\"" + NetOpsString(res) + "\""
+			idx++
+		}
+		header += "};\n"
 	}
 	header += "\n"
 
@@ -386,11 +477,50 @@ func generateComment(call *prog.Call) string {
 }
 
 func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool) ([]string, []uint64, error) {
+	msgSizes := make([]uint64, len(p.Calls))
 	var comments []string
 	if addComments {
 		comments = make([]string, len(p.Calls))
 		for i, call := range p.Calls {
 			comments[i] = generateComment(call)
+		}
+	}
+
+	// generate sendmsg, recvmsg sizes
+	for i, call := range p.Calls {
+		if call.Meta.CallName == "recvmsg" || call.Meta.CallName == "sendmsg" {
+			arg1 := call.Args[1]
+			msghdr := arg1.(*prog.PointerArg).Res.(*prog.GroupArg).Inner
+
+			// fmt.Fprintf(os.Stderr, "Msghdr [%d] %#v\n", i, msghdr)
+
+			// arg3 is array of iovec *msg_iov
+			data3 := msghdr[3].(*prog.PointerArg).Res.(*prog.GroupArg).Inner
+
+			// arg4 is number of iovec *msg_iov
+			// data4 := msghdr[4].(*prog.ConstArg).Val
+
+			totalLength := uint64(0)
+			for _, msg := range data3 {
+				iov := msg.(*prog.GroupArg).Inner
+				msglen := iov[1].(*prog.ConstArg).Val
+				// fmt.Fprintf(os.Stderr, "msglen: %d iov: %#v\n", msglen, iov)
+				totalLength += msglen
+			}
+
+			// fmt.Fprintf(os.Stderr, "[%d]", i)
+			// fmt.Fprintf(os.Stderr, " data0: %#v", data0)
+			// fmt.Fprintf(os.Stderr, " data1: %#v", data1)
+			// fmt.Fprintf(os.Stderr, " data2: %#v", data2)
+			// fmt.Fprintf(os.Stderr, " data3: %#v", data3)
+			// fmt.Fprintf(os.Stderr, " data4: %#v", data4)
+			// fmt.Fprintf(os.Stderr, " data5: %#v", data5)
+			// fmt.Fprintf(os.Stderr, " data6: %#v", data6)
+			// fmt.Fprintf(os.Stderr, " data7: %#v", data7)
+			// fmt.Fprintf(os.Stderr, " data8: %#v", data8)
+			// fmt.Fprintf(os.Stderr, "\n")
+
+			msgSizes[i] = totalLength
 		}
 	}
 
@@ -402,12 +532,12 @@ func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool) ([]
 	if err != nil {
 		return nil, nil, err
 	}
-	calls, vars := ctx.generateCalls(decoded, trace, addComments, comments)
+	calls, vars := ctx.generateCalls(decoded, trace, addComments, comments, msgSizes)
 	return calls, vars, nil
 }
 
 func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
-	callComments []string) ([]string, []uint64) {
+	callComments []string, msgSizes []uint64) ([]string, []uint64) {
 	var calls []string
 	csumSeq := 0
 	for ci, call := range p.Calls {
@@ -457,7 +587,59 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 			missedFDResources[fdRes] = false
 		}
 
+		if callName == "read" || callName == "pread" || callName == "pread64" || callName == "recv" || callName == "recvfrom" {
+			arg0 := call.Args[0]
+			fdRes := arg0.(prog.ExecArgResult).Index
+
+			arg2 := call.Args[2]
+			size := arg2.(prog.ExecArgConst).Value
+			// fmt.Fprintf(os.Stderr, "receive size: %d\n", size)
+			AddToNetOps(fdRes, NetRead, size)
+		}
+
+		if callName == "recvmsg" {
+			arg0 := call.Args[0]
+			fdRes := arg0.(prog.ExecArgResult).Index
+
+			AddToNetOps(fdRes, NetRead, msgSizes[ci])
+		}
+
+		if callName == "write" || callName == "pwrite" || callName == "pwrite64" || callName == "send" || callName == "sendto" {
+			arg0 := call.Args[0]
+			fdRes := arg0.(prog.ExecArgResult).Index
+
+			arg2 := call.Args[2]
+			size := arg2.(prog.ExecArgConst).Value
+			// fmt.Fprintf(os.Stderr, "send size: %d\n", size)
+			AddToNetOps(fdRes, NetWrite, size)
+		}
+
+		if callName == "sendmsg" {
+			arg0 := call.Args[0]
+			fdRes := arg0.(prog.ExecArgResult).Index
+
+			AddToNetOps(fdRes, NetWrite, msgSizes[ci])
+		}
+
+		if callName == "connect" {
+			arg0 := call.Args[0]
+			fdRes := arg0.(prog.ExecArgResult).Index
+
+			connectFDs[fdRes] = true
+		}
 	}
+
+	// remove resources from network ops which are not created by a connect
+
+	tmpOps := make(map[uint64]([]NetOpSize))
+	for res := range connectFDs {
+		nop, ok := NetOpsFDs[res]
+		if ok {
+			tmpOps[res] = nop
+		}
+	}
+
+	NetOpsFDs = tmpOps
 
 	return calls, p.Vars
 }
@@ -545,7 +727,9 @@ func (ctx *context) fmtCallBody(call prog.ExecCall) string {
 		metaArg := &call.Meta.Args[i].Type
 
 		if ctx.opts.CSB {
-			if i == 0 {
+			switch i {
+			// argument index 0
+			case 0:
 				//TODO: check if argument is dirfd already and keep it in that case
 				switch callName {
 				case "readlinkat":
@@ -575,6 +759,19 @@ func (ctx *context) fmtCallBody(call prog.ExecCall) string {
 				case "fchmodat":
 					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
 					continue
+				}
+			// argument index 1
+			case 1:
+				switch callName {
+				case "connect":
+					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->connect_arg)")
+					continue
+				case "bind$inet":
+					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->bind_arg)")
+					continue
+				case "bind$unix":
+					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->tmpdir) \"/\"")
+					// do not continue, as sanitized path needs to be added as well after dirfd path
 				}
 			}
 			if i == 1 {

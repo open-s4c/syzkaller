@@ -20,15 +20,15 @@ var (
 		// Cannot obtain coverage from the forks.
 		"clone": true,
 		// Can support these calls but need to identify the ones in the trace that are worth keeping
-		"mmap":     true,
-		"msync":    true,
-		"mremap":   true,
-		"mprotect": true,
-		"madvise":  true,
-		"munmap":   true,
+		// "mmap":     true,
+		// "msync":    true,
+		// "mremap":   true,
+		// "mprotect": true,
+		// "madvise":  true,
+		// "munmap":   true,
 		// Not interesting coverage
-		"getcwd": true,
-		"getcpu": true,
+		// "getcwd": true,
+		// "getcpu": true,
 		// Cannot evaluate sigset
 		"rt_sigprocmask":  true,
 		"rt_sigtimedwait": true,
