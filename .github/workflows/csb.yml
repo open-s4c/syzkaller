@@ -42,9 +42,16 @@ jobs:
            git fetch
            echo "checking out $BRANCH_NAME"
            git checkout "$BRANCH_NAME"
+           git log
 
            cd ../../
            go env -w GOBIN=$HOME/.local/bin
 
            cd bm-generator
            ./test.sh
+       - name: Upload strace log
+         uses: actions/upload-artifact@v4
+         if: always()
+         with:
+           name: ls_strace
+           path: csb/bm-generator/ls_strace.log
