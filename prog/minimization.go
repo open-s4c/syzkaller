@@ -290,6 +290,34 @@ func relatedCalls(p0 *Prog, callIndex0 int) map[int]bool {
 	}
 }
 
+func checkAllowedCalls(call *Call) bool {
+	allowed := []string{"bind",
+		"connect",
+		"dup",
+		"dup3",
+		"epoll_create1",
+		"epoll_pwait",
+		"eventfd2",
+		"fallocate",
+		"fcntl",
+		"ioctl",
+		"listen",
+		"lseek",
+		"pipe2",
+		"ppoll",
+		"setsockopt",
+		"socket",
+		"umask",
+		"uname",
+	}
+	for _, allowedName := range allowed {
+		if call.Meta.CallName == allowedName {
+			return true
+		}
+	}
+	return false
+}
+
 func relatedCallsFullProgram(p0 *Prog, callIndex0 int, c *Cache, processedCallsIn []bool) ([]bool, []bool) {
 	keepCalls := make([]bool, len(p0.Calls))
 	keepCalls[callIndex0] = true
@@ -479,93 +507,6 @@ func usesRet(call *Call) map[any]bool {
 	return used
 }
 
-func usesBloom(call *Call) *bloom.BloomFilter {
-	// used := make(map[any]bool)
-	used := bloom.NewWithEstimates(10, 0.01)
-	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-		switch typ := arg.Type().(type) {
-		case *ResourceType:
-			a := arg.(*ResultArg)
-			used.Add(ptrToBA(a))
-			if a.Res != nil {
-				used.Add(ptrToBA(a.Res))
-			}
-			for use := range a.uses {
-				used.Add(ptrToBA(use))
-			}
-		case *BufferType:
-			a := arg.(*DataArg)
-			if a.Dir() != DirOut && typ.Kind == BufferFilename {
-				val := string(bytes.TrimRight(a.Data(), "\x00"))
-				used.Add([]byte(val))
-			}
-		}
-	})
-	return used
-}
-
-func newBloomStr(a string) *bloom.BloomFilter {
-	bl := bloom.NewWithEstimates(10, 0.01)
-	bl.Add([]byte(a))
-	return bl
-}
-
-func newBloom[T any](a *T) *bloom.BloomFilter {
-	bl := bloom.NewWithEstimates(10, 0.01)
-	bl.Add(ptrToBA(a))
-	return bl
-}
-
-func usesBlooms(call *Call) []*bloom.BloomFilter {
-	//
-	used := make([]*bloom.BloomFilter, 0)
-
-	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-		switch typ := arg.Type().(type) {
-		case *ResourceType:
-			a := arg.(*ResultArg)
-			used = append(used, newBloom(a))
-			if a.Res != nil {
-				used = append(used, newBloom(a.Res))
-			}
-			for use := range a.uses {
-				used = append(used, newBloom(use))
-			}
-		case *BufferType:
-			a := arg.(*DataArg)
-			if a.Dir() != DirOut && typ.Kind == BufferFilename {
-				val := string(bytes.TrimRight(a.Data(), "\x00"))
-				used = append(used, newBloomStr(val))
-			}
-		}
-	})
-	return used
-}
-
-func usesBA(call *Call) [][]byte {
-	used := make([][]byte, 0)
-	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
-		switch typ := arg.Type().(type) {
-		case *ResourceType:
-			a := arg.(*ResultArg)
-			used = append(used, ptrToBA(a))
-			if a.Res != nil {
-				used = append(used, ptrToBA(a.Res))
-			}
-			for use := range a.uses {
-				used = append(used, ptrToBA(use))
-			}
-		case *BufferType:
-			a := arg.(*DataArg)
-			if a.Dir() != DirOut && typ.Kind == BufferFilename {
-				val := string(bytes.TrimRight(a.Data(), "\x00"))
-				used = append(used, []byte(val))
-			}
-		}
-	})
-	return used
-}
-
 func uses(call *Call) map[any]bool {
 	used := make(map[any]bool)
 	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
@@ -599,11 +540,9 @@ func intersects(list, list1 map[any]bool) bool {
 	return false
 }
 
-func testsBlooms(list [][]byte, bf *bloom.BloomFilter) bool {
-	for _, what := range list {
-		if bf.Test(what) {
-			return true
-		}
+func intersectBFs(bf1 *bloom.BloomFilter, bf2 *bloom.BloomFilter) bool {
+	if bf1.BitSet().IntersectionCardinality(bf2.BitSet()) > 0 {
+		return true
 	}
 	return false
 }
