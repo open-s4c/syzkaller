@@ -268,7 +268,16 @@ func sanitizeReadlinkat(call *prog.Call, subdirs map[string](bool)) map[string](
 func sanitizeBindUnix(call *prog.Call, subdirs map[string](bool), unixsockets map[string](bool)) (map[string](bool), map[string](bool)) {
 	a1 := call.Args[1].(*prog.PointerArg)
 	// path argument
-	d1 := a1.Res.(*prog.UnionArg).Option.(*prog.GroupArg).Inner
+	var d1 []prog.Arg
+	switch a1.Res.(type) {
+	case *prog.UnionArg:
+		d1 = a1.Res.(*prog.UnionArg).Option.(*prog.GroupArg).Inner
+	case *prog.GroupArg:
+		d1 = a1.Res.(*prog.GroupArg).Inner
+	default:
+		panic("Error detecting unix bind path argument type")
+	}
+		
 	sockType := d1[0].(*prog.ConstArg).Val
 	path := d1[1].(*prog.DataArg).Data()
 
