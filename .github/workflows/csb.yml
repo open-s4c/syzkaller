@@ -49,8 +49,10 @@ jobs:
 
            echo "checking out $BRANCH_NAME"
            if git rev-parse --verify "fork/${BRANCH_NAME}" >/dev/null 2>&1; then
+            echo "using branch fork/${BRANCH_NAME}"
             git checkout "fork/${BRANCH_NAME}"
            else
+            echo "using default"
             git checkout .
            fi
 
