@@ -21,7 +21,8 @@ jobs:
           cd tools/${{ matrix.tool }}
           go build
 
-   Test:
+   Test-with-CSB:
+     if: github.event_name == 'push'
      runs-on: ubuntu-latest
      steps:
        - uses: actions/checkout@v4
@@ -49,16 +50,7 @@ jobs:
            echo "Checking out the ${GITHUB_SHA}"
            git checkout ${GITHUB_SHA}
 
-           #echo "checking out $BRANCH_NAME"
-           #if git rev-parse --verify "fork/${BRANCH_NAME}" >/dev/null 2>&1; then
-           # echo "using branch fork/${BRANCH_NAME}"
-           # git checkout "fork/${BRANCH_NAME}"
-           #else
-           # echo "using default"
-           # git checkout .
-           #fi
-
-           git log
+           git log -1
 
            cd ../../
            go env -w GOBIN=$HOME/.local/bin
