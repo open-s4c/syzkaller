@@ -648,7 +648,17 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 		}
 	}
 
-	NetOpsFDs = tmpOps
+	NetOpsFDsConnect = tmpOps
+
+	tmpOps = make(map[uint64]([]NetOpSize))
+	for res := range acceptFDs {
+		nop, ok := NetOpsFDs[res]
+		if ok {
+			tmpOps[res] = nop
+		}
+	}
+
+	NetOpsFDsAccept = tmpOps
 
 	return calls, p.Vars
 }
