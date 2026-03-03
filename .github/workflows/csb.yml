@@ -45,16 +45,18 @@ jobs:
            cd deps/syzkaller/
            echo "Adding fork remote: https://github.com/${FORK_OWNER}/syzkaller.git"
            git remote add fork "https://github.com/${FORK_OWNER}/syzkaller.git" || true
-           git fetch fork || true
+           git fetch fork
+           echo "Checking out the ${GITHUB_SHA}"
+           git checkout ${GITHUB_SHA}
 
-           echo "checking out $BRANCH_NAME"
-           if git rev-parse --verify "fork/${BRANCH_NAME}" >/dev/null 2>&1; then
-            echo "using branch fork/${BRANCH_NAME}"
-            git checkout "fork/${BRANCH_NAME}"
-           else
-            echo "using default"
-            git checkout .
-           fi
+           #echo "checking out $BRANCH_NAME"
+           #if git rev-parse --verify "fork/${BRANCH_NAME}" >/dev/null 2>&1; then
+           # echo "using branch fork/${BRANCH_NAME}"
+           # git checkout "fork/${BRANCH_NAME}"
+           #else
+           # echo "using default"
+           # git checkout .
+           #fi
 
            git log
 
