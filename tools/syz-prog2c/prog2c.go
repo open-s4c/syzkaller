@@ -402,13 +402,12 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 
 // generateUniqueFileName generates a filename that does not exist.
 //
-//
 // Parameters:
-//  - fileNameWE: filename including path without extension.
-//  - ext: file extension.
+//   - fileNameWE: filename including path without extension.
+//   - ext: file extension.
 //
 // Returns:
-// 	- filename with a unique index that does not exist.
+//   - filename with a unique index that does not exist.
 func generateUniqueFileName(baseName string, ext string) string {
 	fileIdx := 0
 	fileName := baseName + "_" + strconv.Itoa(fileIdx) + ext
@@ -553,9 +552,9 @@ func main() {
 			// C program name, but with extension .meta instead of .h or .c
 			lastIndex := strings.LastIndex(outFilePath, fileExt)
 			if lastIndex == -1 {
-        		panic("File extension not found")
-    		}
-			metaFilePath =  outFilePath[:lastIndex] + ".meta"
+				panic("File extension not found")
+			}
+			metaFilePath = outFilePath[:lastIndex] + ".meta"
 			// Dump meta data file to disk
 			dumpFile(metaFilePath, []byte(metaData))
 		}
