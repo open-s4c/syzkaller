@@ -216,7 +216,7 @@ func toStringArray(opMap map[uint64][]NetOpSize) string {
 		if idx > 0 {
 			opsSeq += ", "
 		}
-		opsSeq += "\"" +  NetOpsString(res, opMap)  + "\""
+		opsSeq += "\"" + NetOpsString(res, opMap) + "\""
 		idx++
 	}
 	return opsSeq
