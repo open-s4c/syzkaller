@@ -400,6 +400,40 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 	return p, subdirs, filesizes, filemap, maxWriteSize
 }
 
+// generateUniqueFileName generates a filename that does not exist.
+//
+//
+// Parameters:
+//  - fileNameWE: filename including path without extension.
+//  - ext: file extension.
+//
+// Returns:
+// 	- filename with a unique index that does not exist.
+func generateUniqueFileName(baseName string, ext string) string {
+	fileIdx := 0
+	fileName := baseName + "_" + strconv.Itoa(fileIdx) + ext
+	// Check if file exists
+	for {
+		_, err := os.Stat(fileName)
+		if err != nil && !errors.Is(err, os.ErrExist) {
+			// File doesn't exist, safe to return
+			return fileName
+		}
+
+		// File exists, increment index and try again
+		fileIdx++
+		fileName = baseName + "_" + strconv.Itoa(fileIdx) + ext
+	}
+}
+
+func dumpFile(fileName string, data []byte) {
+	if err := osutil.WriteFile(fileName, data); err != nil {
+		log.Fatalf("Failed to generate %v, failed with error: %v", fileName, err)
+	} else {
+		log.Printf("Stored file %s", fileName)
+	}
+}
+
 func main() {
 	flag.Usage = func() {
 		flag.PrintDefaults()
@@ -488,7 +522,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to generate C source: %v\n", err)
 		os.Exit(1)
 	}
-
 	if *flagFormat {
 		if formatted, err := csource.Format(src); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -496,20 +529,12 @@ func main() {
 			src = formatted
 		}
 	}
-
-	// store information about the program being minimized or a thread representation in the generated c file
-	/*
-	 * This header represents a complete thread as extracted from the strace log.
-	 */
-	/*
-	 * This header represents a minimized program extracted from one thread of the strace log.
-	 */
-
+	// This header represents a minimized program extracted from one thread of the strace log.
 	if *flagCFile != "" {
 		var outFilePath string
 		var metaFilePath string
 		var fileBaseWithoutExt string
-		var fileIdx int
+
 		fileExt := filepath.Ext(*flagCFile)
 
 		// generate path without extension
@@ -518,31 +543,21 @@ func main() {
 		} else {
 			fileBaseWithoutExt = *flagCFile
 		}
-
-		fileIdx = 0
-		outFilePath = fileBaseWithoutExt + "_" + strconv.Itoa(fileIdx) + fileExt
-		_, err := os.Stat(outFilePath)
-		for !errors.Is(err, os.ErrNotExist) {
-			fileIdx++
-			outFilePath = fileBaseWithoutExt + "_" + strconv.Itoa(fileIdx) + fileExt
-			_, err = os.Stat(outFilePath)
-		}
+		outFilePath = generateUniqueFileName(fileBaseWithoutExt, fileExt)
+		// Dump C program to disk
+		dumpFile(outFilePath, src)
+		// Check if there is meta data associated with the C program
 		if metaData != "" {
-			metaFilePath = fileBaseWithoutExt + "_" + strconv.Itoa(fileIdx) + ".meta"
-			if err := osutil.WriteFile(metaFilePath, []byte(metaData)); err != nil {
-				log.Fatalf("failed to output file: %v", err)
-			}
+			// Meta data file name should be the same as the
+			// C program name, but with extension .meta instead of .h or .c
+			lastIndex := strings.LastIndex(outFilePath, fileExt)
+			if lastIndex == -1 {
+        		panic("File extension not found")
+    		}
+			metaFilePath =  outFilePath[:lastIndex] + ".meta"
+			// Dump meta data file to disk
+			dumpFile(metaFilePath, []byte(metaData))
 		}
-		if err := osutil.WriteFile(outFilePath, src); err != nil {
-			log.Fatalf("failed to output file: %v", err)
-		}
-		log.Printf("Stored program %s", outFilePath)
-		if err := osutil.WriteFile(outFilePath, src); err != nil {
-			log.Fatalf("failed to output meta file file: %v", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "meta generated %s\n", metaFilePath)
-		}
-
 	} else {
 		os.Stdout.Write(src)
 	}
