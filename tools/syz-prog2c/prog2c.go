@@ -483,7 +483,7 @@ func main() {
 		MaxWriteSize:  maxWriteSize,
 	}
 
-	src, err := csource.Write(p, opts)
+	src, metaData, err := csource.Write(p, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to generate C source: %v\n", err)
 		os.Exit(1)
@@ -507,6 +507,7 @@ func main() {
 
 	if *flagCFile != "" {
 		var outFilePath string
+		var metaFilePath string
 		var fileBaseWithoutExt string
 		var fileIdx int
 		fileExt := filepath.Ext(*flagCFile)
@@ -520,17 +521,27 @@ func main() {
 
 		fileIdx = 0
 		outFilePath = fileBaseWithoutExt + "_" + strconv.Itoa(fileIdx) + fileExt
-
 		_, err := os.Stat(outFilePath)
 		for !errors.Is(err, os.ErrNotExist) {
 			fileIdx++
 			outFilePath = fileBaseWithoutExt + "_" + strconv.Itoa(fileIdx) + fileExt
 			_, err = os.Stat(outFilePath)
 		}
+		if metaData != "" {
+			metaFilePath = fileBaseWithoutExt + "_" + strconv.Itoa(fileIdx) + ".meta"
+			if err := osutil.WriteFile(metaFilePath, []byte(metaData)); err != nil {
+				log.Fatalf("failed to output file: %v", err)
+			}
+		}
 		if err := osutil.WriteFile(outFilePath, src); err != nil {
 			log.Fatalf("failed to output file: %v", err)
 		}
 		log.Printf("Stored program %s", outFilePath)
+		if err := osutil.WriteFile(outFilePath, src); err != nil {
+			log.Fatalf("failed to output meta file file: %v", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "meta generated %s\n", metaFilePath)
+		}
 
 	} else {
 		os.Stdout.Write(src)
