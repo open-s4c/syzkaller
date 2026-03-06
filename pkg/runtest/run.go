@@ -393,7 +393,7 @@ func (rt *Context) createTest(req *runRequest) {
 		defer func() {
 			<-rt.buildSem
 		}()
-		src, err := csource.Write(req.Prog, *req.sourceOpts)
+		src, _, err := csource.Write(req.Prog, *req.sourceOpts)
 		if err != nil {
 			req.err = fmt.Errorf("failed to create C source: %w", err)
 			req.Request.Done(&queue.Result{})

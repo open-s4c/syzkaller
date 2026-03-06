@@ -119,7 +119,7 @@ func recordTitle(res *repro.Result, fileName string) {
 }
 
 func recordCRepro(res *repro.Result, fileName string) {
-	src, err := csource.Write(res.Prog, res.Opts)
+	src, _, err := csource.Write(res.Prog, res.Opts)
 	if err != nil {
 		log.Fatalf("failed to generate C repro: %v", err)
 	}

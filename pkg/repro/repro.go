@@ -1037,7 +1037,7 @@ func (stats *Stats) FullLog() []byte {
 }
 
 func (repro *Result) CProgram() ([]byte, error) {
-	cprog, err := csource.Write(repro.Prog, repro.Opts)
+	cprog, _, err := csource.Write(repro.Prog, repro.Opts)
 	if err == nil {
 		formatted, err := csource.Format(cprog)
 		if err == nil {

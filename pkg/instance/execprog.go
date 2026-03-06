@@ -173,7 +173,7 @@ type ExecParams struct {
 }
 
 func (inst *ExecProgInstance) RunCProg(params ExecParams) (*RunResult, error) {
-	src, err := csource.Write(params.CProg, params.Opts)
+	src, _, err := csource.Write(params.CProg, params.Opts)
 	if err != nil {
 		return nil, err
 	}

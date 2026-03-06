@@ -586,7 +586,7 @@ func TestParsing(t *testing.T) {
 					if runtime.GOOS != sysTarget.BuildOS {
 						continue // we need at least preprocessor binary to generate sources
 					}
-					if _, err = csource.Write(p, csource.ExecutorOpts); err != nil {
+					if _, _, err = csource.Write(p, csource.ExecutorOpts); err != nil {
 						t.Errorf("failed to generate C source for %v: %v", file, err)
 					}
 				}

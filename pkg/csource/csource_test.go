@@ -136,7 +136,7 @@ func testOne(t *testing.T, p *prog.Prog, opts Options) {
 	if atomic.LoadUint32(&failedTests) > maxFailures {
 		return
 	}
-	src, err := Write(p, opts)
+	src, _, err := Write(p, opts)
 	if err != nil {
 		if atomic.AddUint32(&failedTests, 1) > maxFailures {
 			t.Fatal()
