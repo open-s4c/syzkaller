@@ -415,7 +415,9 @@ func generateUniqueFileName(baseName string, ext string) string {
 	// Check if file exists
 	for {
 		_, err := os.Stat(fileName)
-		if err != nil && !errors.Is(err, os.ErrExist) {
+		// Stats will returns an error (ErrNotExist) when
+		// the file does not exist.
+		if err != nil && errors.Is(err, os.ErrNotExist) {
 			// File doesn't exist, safe to return
 			return fileName
 		}
@@ -428,7 +430,7 @@ func generateUniqueFileName(baseName string, ext string) string {
 
 func dumpFile(fileName string, data []byte) {
 	if err := osutil.WriteFile(fileName, data); err != nil {
-		log.Fatalf("Failed to generate %v, failed with error: %v", fileName, err)
+		log.Fatalf("Failed to generate %s, failed with error: %v", fileName, err)
 	} else {
 		log.Printf("Stored file %s", fileName)
 	}
@@ -534,7 +536,6 @@ func main() {
 		var outFilePath string
 		var metaFilePath string
 		var fileBaseWithoutExt string
-
 		fileExt := filepath.Ext(*flagCFile)
 
 		// generate path without extension
