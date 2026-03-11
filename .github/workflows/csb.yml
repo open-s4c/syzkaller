@@ -7,7 +7,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tool: [syz-trace2syz, syz-prog2c, syz-extraction]
+        tool: [trace2syz, prog2c, extraction]
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -17,9 +17,7 @@ jobs:
       - name: Compile ${{ matrix.tool }}
         run: |
           go env -w GOBIN=$HOME/.local/bin
-          make
-          cd tools/${{ matrix.tool }}
-          go build
+          make ${{ matrix.tool }}
 
    Test-with-CSB:
      if: github.event_name == 'push'
