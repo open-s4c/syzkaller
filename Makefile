@@ -188,6 +188,9 @@ diff: descriptions target
 prog2c: descriptions
 	GOOS=$(HOSTOS) GOARCH=$(HOSTARCH) $(HOSTGO) build $(GOHOSTFLAGS) -o ./bin/syz-prog2c github.com/google/syzkaller/tools/syz-prog2c
 
+extraction: descriptions
+	GOOS=$(HOSTOS) GOARCH=$(HOSTARCH) $(HOSTGO) build $(GOHOSTFLAGS) -o ./bin/syz-extraction github.com/google/syzkaller/tools/syz-extraction
+
 crush: descriptions
 	GOOS=$(HOSTOS) GOARCH=$(HOSTARCH) $(HOSTGO) build $(GOHOSTFLAGS) -o ./bin/syz-crush github.com/google/syzkaller/tools/syz-crush
 
