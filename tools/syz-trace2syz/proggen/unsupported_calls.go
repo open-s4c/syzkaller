@@ -7,10 +7,9 @@ var (
 	// unsupportedCalls lists system calls that we should skip when parsing.
 	// Some of these are unsupported or not worth executing.
 	unsupportedCalls = map[string]bool{
-		// While we have system call descriptions for execve it is not worth adding
-		// the ones in traces. Every trace has an execve at the beginning which means
-		// all the system calls afterwards will not execute
-		"execve": true,
+		// Process termination cannot be replayed inside a repeatable CSB operation.
+		"exit":       true,
+		"exit_group": true,
 		// Unsafe to set process properties.
 		"arch_prctl": true,
 		// Not interesting coverage

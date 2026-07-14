@@ -67,6 +67,27 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
+func TestCSBExecLifecycle(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := target.Deserialize([]byte("syz_csb_execve()\nsyz_csb_execveat()\nsyz_csb_fexecve()\n"), prog.NonStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testOne(t, p, Options{Slowdown: 1})
+	src, _, err := Write(p, Options{CSB: true, Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"csb_exec_lifecycle", "__NR_execveat", "__NR_wait4"} {
+		assert.Contains(t, string(src), want)
+	}
+	assert.NotContains(t, string(src), "return -errno")
+}
+
 func testPseudoSyscalls(t *testing.T, target *prog.Target, ct *prog.ChoiceTable) {
 	// Use options that are as minimal as possible.
 	// We want to ensure that the code can always be compiled.

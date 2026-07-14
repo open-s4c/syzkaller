@@ -108,23 +108,24 @@ func ParseData(data []byte, target *prog.Target, splitThreads bool, argLength bo
 	}
 	var progs []*prog.Prog
 	if splitThreads {
-		parseTree(tree, tree.RootPid, target, &progs, argLength)
+		parseTree(tree, tree.RootPid, target, &progs, argLength, true)
 	} else {
-		progs = append(progs, genProg(trace, target, argLength, false))
+		progs = append(progs, genProg(trace, target, argLength, false, true))
 	}
 	return progs, nil
 }
 
 // parseTree groups system calls in the trace by process id.
 // The tree preserves process hierarchy i.e. parent->[]child
-func parseTree(tree *parser.TraceTree, pid int64, target *prog.Target, progs *[]*prog.Prog, argLength bool) {
+func parseTree(tree *parser.TraceTree, pid int64, target *prog.Target, progs *[]*prog.Prog, argLength bool,
+	skipBootstrapExec bool) {
 	log.Logf(2, "parsing trace pid %v", pid)
-	if p := genProg(tree.TraceMap[pid], target, argLength, false); p != nil {
+	if p := genProg(tree.TraceMap[pid], target, argLength, false, skipBootstrapExec); p != nil {
 		*progs = append(*progs, p)
 	}
 	for _, childPid := range tree.Ptree[pid] {
 		if tree.TraceMap[childPid] != nil {
-			parseTree(tree, childPid, target, progs, argLength)
+			parseTree(tree, childPid, target, progs, argLength, false)
 		}
 	}
 }
@@ -141,7 +142,7 @@ type context struct {
 }
 
 // genProg converts a trace to one of our programs.
-func genProg(trace *parser.Trace, target *prog.Target, argLength bool, randomized bool) *prog.Prog {
+func genProg(trace *parser.Trace, target *prog.Target, argLength bool, randomized, skipBootstrapExec bool) *prog.Prog {
 	var status string
 	retCache := newRCache()
 	ctx := &context{
@@ -153,6 +154,8 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength bool, randomize
 	}
 	fmt.Fprintf(os.Stderr, "Parsing syscalls into syzlang\n")
 	numCalls := len(trace.Calls)
+	bootstrapExecSkipped := false
+	terminatedTIDs := make(map[int64]bool)
 	for sIdx, sCall := range trace.Calls {
 		if sIdx%1000 == 0 {
 			status = fmt.Sprintf("-- Progress [%03.1f/100%%] --", (100.0 * float32(sIdx) / float32(numCalls)))
@@ -163,6 +166,14 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength bool, randomize
 			// 2179  wait4(2180,  <unfinished ...>
 			// 2179  <... wait4 resumed> 0x7fff28981bf8, 0, NULL) = ? ERESTARTSYS
 			// 2179  --- SIGUSR1 {si_signo=SIGUSR1, si_code=SI_USER, si_pid=2180, si_uid=0} ---
+			continue
+		}
+		if terminatedTIDs[sCall.Pid] {
+			continue
+		}
+		if skipBootstrapExec && !bootstrapExecSkipped && sCall.Ret == 0 &&
+			(sCall.CallName == "execve" || sCall.CallName == "execveat") {
+			bootstrapExecSkipped = true
 			continue
 		}
 		if shouldSkip(sCall) {
@@ -179,6 +190,10 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength bool, randomize
 				log.Fatalf("%v", err)
 			}
 		}
+		// Later calls from this TID belong to the replacement image.
+		if sCall.Ret == 0 && (sCall.CallName == "execve" || sCall.CallName == "execveat") {
+			terminatedTIDs[sCall.Pid] = true
+		}
 	}
 	fmt.Fprintf(os.Stderr, "%s\r", strings.Repeat(" ", len(status)))
 	p, err := ctx.builder.Finalize()
@@ -190,6 +205,9 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength bool, randomize
 
 // genCalls routes sanitized syscalls to bounded generators that may emit setup and replay calls.
 func (ctx *context) genCalls() []*prog.Call {
+	if name := execLifecycleCall(ctx.currentStraceCall); name != "" {
+		return singleCall(ctx.genDefaultSafeCall(name))
+	}
 	switch ctx.currentStraceCall.CallName {
 	case "mmap":
 		return singleCall(ctx.genMmapCall(false))
@@ -661,6 +679,24 @@ func roundUp(v, unit uint64) uint64 {
 		return v
 	}
 	return ((v + unit - 1) / unit) * unit
+}
+
+func execLifecycleCall(call *parser.Syscall) string {
+	switch call.CallName {
+	case "execve":
+		return "syz_csb_execve"
+	case "execveat":
+		if len(call.Args) > 4 {
+			path, pathOK := call.Args[1].(*parser.BufferType)
+			flags, flagsOK := call.Args[4].(parser.Constant)
+			if pathOK && path.Val == "" && flagsOK && flags.Val()&0x1000 != 0 {
+				return "syz_csb_fexecve"
+			}
+		}
+		return "syz_csb_execveat"
+	default:
+		return ""
+	}
 }
 
 func (ctx *context) Select(syscall *parser.Syscall) *prog.Syscall {

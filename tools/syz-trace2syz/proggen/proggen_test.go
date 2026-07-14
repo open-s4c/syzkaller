@@ -277,7 +277,7 @@ ioctl$RTC_WKALM_SET(r0, 0x4028700f, &(0x7f0000000040)={0x0, 0x0, {0x0, 0x0, 0x0,
 		if err != nil {
 			t.Fatal(err)
 		}
-		p := genProg(tree.TraceMap[tree.RootPid], target, false, true)
+		p := genProg(tree.TraceMap[tree.RootPid], target, false, true, false)
 		if p == nil {
 			t.Fatalf("failed to parse trace")
 		}
@@ -491,6 +491,99 @@ func TestTaskCreationLifecycleFromTrace(t *testing.T) {
 	}
 }
 
+func TestExecLifecycleCall(t *testing.T) {
+	tests := []struct {
+		call *parser.Syscall
+		want string
+	}{
+		{parser.NewSyscall(1, "execve", nil, 0, false, false), "syz_csb_execve"},
+		{parser.NewSyscall(1, "execveat", nil, 0, false, false), "syz_csb_execveat"},
+		{parser.NewSyscall(1, "execveat", []parser.IrType{nil, &parser.BufferType{Val: ""}, nil, nil, parser.Constant(0x1000)},
+			0, false, false), "syz_csb_fexecve"},
+		{parser.NewSyscall(1, "execveat", []parser.IrType{nil, &parser.BufferType{Val: "/bin/true"}, nil, nil,
+			parser.Constant(0x1000)}, 0, false, false), "syz_csb_execveat"},
+	}
+	for _, test := range tests {
+		if got := execLifecycleCall(test.call); got != test.want {
+			t.Errorf("%s mapped to %q, want %q", test.call.CallName, got, test.want)
+		}
+	}
+}
+
+func TestSkipOnlyRootBootstrapExec(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := &parser.Trace{Calls: []*parser.Syscall{
+		parser.NewSyscall(1, "execve", nil, -1, false, false),
+		parser.NewSyscall(1, "getpid", nil, 1, false, false),
+		parser.NewSyscall(1, "execveat", nil, 0, false, false),
+		parser.NewSyscall(1, "getppid", nil, 1, false, false),
+		parser.NewSyscall(1, "execve", nil, 0, false, false),
+	}}
+
+	root := string(genProg(trace, target, false, false, true).Serialize())
+	if got := strings.Count(root, "syz_csb_execve"); got != 2 {
+		t.Fatalf("root contains %d exec lifecycles, want 2:\n%s", got, root)
+	}
+	if !strings.Contains(root, "getppid") {
+		t.Fatalf("root lost calls after its skipped bootstrap exec:\n%s", root)
+	}
+	child := string(genProg(trace, target, false, false, false).Serialize())
+	if got := strings.Count(child, "syz_csb_execve"); got != 2 {
+		t.Fatalf("child contains %d exec lifecycles, want 2:\n%s", got, child)
+	}
+	if strings.Contains(child, "getppid") {
+		t.Fatalf("child retained calls after its successful workload exec:\n%s", child)
+	}
+}
+
+func TestSuccessfulExecTerminatesOnlyItsTID(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := &parser.Trace{Calls: []*parser.Syscall{
+		parser.NewSyscall(1, "execve", nil, 0, false, false),
+		parser.NewSyscall(2, "getpid", nil, 2, false, false),
+		parser.NewSyscall(2, "execveat", nil, 0, false, false),
+		parser.NewSyscall(1, "getppid", nil, 1, false, false),
+		parser.NewSyscall(2, "getuid", nil, 0, false, false),
+	}}
+
+	got := string(genProg(trace, target, false, false, false).Serialize())
+	if lifecycles := strings.Count(got, "syz_csb_execve"); lifecycles != 2 {
+		t.Fatalf("got %d exec lifecycles, want 2:\n%s", lifecycles, got)
+	}
+	if !strings.Contains(got, "getpid") {
+		t.Fatalf("calls from a live interleaved TID were lost:\n%s", got)
+	}
+	if strings.Contains(got, "getppid") || strings.Contains(got, "getuid") {
+		t.Fatalf("calls after successful exec remained in their TID:\n%s", got)
+	}
+}
+
+func TestExitCallsAreSkipped(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := &parser.Trace{Calls: []*parser.Syscall{
+		parser.NewSyscall(1, "execve", nil, 0, false, false),
+		parser.NewSyscall(2, "exit", []parser.IrType{parser.Constant(0)}, 0, false, false),
+		parser.NewSyscall(3, "exit_group", []parser.IrType{parser.Constant(0)}, 0, false, false),
+	}}
+
+	got := string(genProg(trace, target, false, false, false).Serialize())
+	if !strings.Contains(got, "syz_csb_execve()") {
+		t.Fatalf("exec lifecycle was lost:\n%s", got)
+	}
+	if strings.Contains(got, "exit(") || strings.Contains(got, "exit_group(") {
+		t.Fatalf("process termination call remained:\n%s", got)
+	}
+}
+
 func parseSingleProg(t *testing.T, input string) *prog.Prog {
 	t.Helper()
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
@@ -505,7 +598,7 @@ func parseSingleProg(t *testing.T, input string) *prog.Prog {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := genProg(tree.TraceMap[tree.RootPid], target, false, true)
+	p := genProg(tree.TraceMap[tree.RootPid], target, false, true, false)
 	if p == nil {
 		t.Fatal("failed to parse trace")
 	}
