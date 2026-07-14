@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"syscall"
 	"testing"
 
 	"github.com/google/syzkaller/prog"
@@ -110,13 +109,13 @@ pwrite64(r0, &(0x7f0000000040)='abc', 0x3, 0x1000)
 		t.Fatalf("sanitized path = %q, want %q", got, "./tmp/file")
 	}
 	flags := p.Calls[0].Args[2].(*prog.ConstArg).Val
-	if flags&syscall.O_CREAT == 0 {
+	if flags&linuxAmd64OCreat == 0 {
 		t.Fatalf("openat flags %#x do not include O_CREAT", flags)
 	}
-	if flags&syscall.O_EXCL != 0 {
+	if flags&linuxAmd64OExcl != 0 {
 		t.Fatalf("openat flags %#x still include O_EXCL", flags)
 	}
-	if flags&syscall.O_DIRECT != 0 {
+	if flags&linuxAmd64ODirect != 0 {
 		t.Fatalf("openat flags %#x still include O_DIRECT", flags)
 	}
 	if got := p.Calls[0].Args[3].(*prog.ConstArg).Val; got != 0777 {

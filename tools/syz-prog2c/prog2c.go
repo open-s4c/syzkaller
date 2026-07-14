@@ -51,6 +51,13 @@ var (
 	flagRuntimeLoopMin = flag.Int("runtime_loop_min", 2, "minimum consecutive identical fragments required for -runtime_loops")
 )
 
+const (
+	linuxAmd64OCreat     = 64
+	linuxAmd64OExcl      = 128
+	linuxAmd64ODirect    = 16384
+	linuxAmd64ODirectory = 65536
+)
+
 type BMConfigApps struct {
 	Name       string `json:"name"`
 	Operations []int  `json:"operations"`
@@ -155,20 +162,20 @@ func sanitizeOpenAt(call *prog.Call, subdirs map[string](bool), filemap map[uint
 
 	// adds O_CREAT if O_DIRECTORY is not specified (include O_TMPFILE)
 	a2 := call.Args[2].(*prog.ConstArg)
-	if (a2.Val & syscall.O_DIRECTORY) != syscall.O_DIRECTORY {
-		a2.Val |= syscall.O_CREAT
+	if (a2.Val & linuxAmd64ODirectory) != linuxAmd64ODirectory {
+		a2.Val |= linuxAmd64OCreat
 	}
 
 	// if it wants to open a directory, put the complete path into the list of created directories
-	if (a2.Val & syscall.O_DIRECTORY) == syscall.O_DIRECTORY {
+	if (a2.Val & linuxAmd64ODirectory) == linuxAmd64ODirectory {
 		subdirs[d1_str] = true
 	}
 
 	// removes O_EXCL
-	a2.Val &= ^uint64(syscall.O_EXCL)
+	a2.Val &= ^uint64(linuxAmd64OExcl)
 
 	// removes O_DIRECT
-	a2.Val &= ^uint64(syscall.O_DIRECT)
+	a2.Val &= ^uint64(linuxAmd64ODirect)
 
 	// d2 := a2.Val
 
