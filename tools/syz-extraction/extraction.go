@@ -67,6 +67,7 @@ func readProg() (p *prog.Prog) {
 		fmt.Fprintf(os.Stderr, "failed to read prog file: %v\n", err)
 		os.Exit(1)
 	}
+	comments := csbCommentsFromData(data)
 	mode := prog.NonStrictUnsafe
 	safeMode := prog.NonStrict
 	if *flagStrict {
@@ -84,7 +85,23 @@ func readProg() (p *prog.Prog) {
 		fmt.Fprintf(os.Stderr, "failed to deserialize sanitized program: %v\n", err)
 		os.Exit(1)
 	}
+	p.Comments = comments
 	return
+}
+
+func csbCommentsFromData(data []byte) []string {
+	var ret []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "#")
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "csb.trace.") && !seen[line] {
+			ret = append(ret, line)
+			seen[line] = true
+		}
+	}
+	return ret
 }
 
 func sanitizeFilenames(p *prog.Prog) {
@@ -317,7 +334,8 @@ func processComponents(p *prog.Prog, components []prog.RelatedCallComponent) []e
 					continue
 				}
 				pF := p.CloneCalls(indices)
-				results[i].data = pF.Serialize()
+				pF.Comments = append([]string(nil), p.Comments...)
+				results[i].data = serializeWithComments(pF)
 				results[i].calls = len(indices)
 				scallHist := genSyscallHist(pF)
 				results[i].names = stat.TopKNames(scallHist, *flagTopCalls)
@@ -353,6 +371,38 @@ func saveProg2File(data []byte, prefix string, index int) {
 	if err := osutil.WriteFile(outName, data); err != nil {
 		log.Fatalf("failed to output file: %v", err)
 	}
+}
+
+func serializeWithComments(p *prog.Prog) []byte {
+	data := p.Serialize()
+	comments := csbComments(p)
+	if len(comments) == 0 {
+		return data
+	}
+	var b strings.Builder
+	for _, comment := range comments {
+		fmt.Fprintf(&b, "# %s\n", comment)
+	}
+	b.Write(data)
+	return []byte(b.String())
+}
+
+func csbComments(p *prog.Prog) []string {
+	var ret []string
+	seen := make(map[string]bool)
+	add := func(comment string) {
+		if strings.HasPrefix(comment, "csb.trace.") && !seen[comment] {
+			ret = append(ret, comment)
+			seen[comment] = true
+		}
+	}
+	for _, comment := range p.Comments {
+		add(comment)
+	}
+	for _, call := range p.Calls {
+		add(call.Comment)
+	}
+	return ret
 }
 
 // a map from TID to clone depth

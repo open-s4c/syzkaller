@@ -40,6 +40,37 @@ getsockopt(-1, 132, 119, 0x200005c0, [14]) = -1 EBADF (Bad file descriptor)
 }
 
 func runTrace2Syz(t *testing.T, tracePath string) map[string][]byte {
+	t.Helper()
+	return runTrace2SyzForArch(t, tracePath, "arm64")
+}
+
+func TestTrace2SyzEmbedsTargetArchMetadata(t *testing.T) {
+	inputDir := t.TempDir()
+	tracePath := filepath.Join(inputDir, "trace_case.log")
+	trace := []byte(`openat(-100, "/tmp/x", 0) = 3
+close(3) = 0
+`)
+	if err := os.WriteFile(tracePath, trace, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			out := runTrace2SyzForArch(t, tracePath, arch)
+			for name, data := range out {
+				if !bytes.Contains(data, []byte("# csb.trace.os=linux\n")) {
+					t.Fatalf("%s missing os metadata:\n%s", name, data)
+				}
+				want := []byte("# csb.trace.arch=" + arch + "\n")
+				if !bytes.Contains(data, want) {
+					t.Fatalf("%s missing arch metadata %q:\n%s", name, want, data)
+				}
+			}
+		})
+	}
+}
+
+func runTrace2SyzForArch(t *testing.T, tracePath, arch string) map[string][]byte {
 	t.Logf("Testing logfile %s\n", tracePath)
 	t.Helper()
 	outDir := t.TempDir()
@@ -50,12 +81,16 @@ func runTrace2Syz(t *testing.T, tracePath string) map[string][]byte {
 	oldSkipCorpus := *flagSkipCorpus
 	oldSplitThreads := *flagSplitThreads
 	oldArgLength := *flagArgLength
+	oldOS := *flagOS
+	oldArch := *flagArch
 	*flagFile = tracePath
 	*flagDir = ""
 	*flagDeserialize = outDir
 	*flagSkipCorpus = true
 	*flagSplitThreads = false
 	*flagArgLength = false
+	*flagOS = "linux"
+	*flagArch = arch
 	t.Cleanup(func() {
 		*flagFile = oldFile
 		*flagDir = oldDir
@@ -63,9 +98,11 @@ func runTrace2Syz(t *testing.T, tracePath string) map[string][]byte {
 		*flagSkipCorpus = oldSkipCorpus
 		*flagSplitThreads = oldSplitThreads
 		*flagArgLength = oldArgLength
+		*flagOS = oldOS
+		*flagArch = oldArch
 	})
 
-	parseTraces(initializeTarget(goos, arch))
+	parseTraces(initializeTarget(*flagOS, *flagArch))
 	return readOutputFiles(t, outDir)
 }
 
