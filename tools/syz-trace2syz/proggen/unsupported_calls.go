@@ -13,8 +13,6 @@ var (
 		"execve": true,
 		// Unsafe to set process properties.
 		"arch_prctl": true,
-		// Cannot obtain coverage from the forks.
-		"clone": true,
 		// Not interesting coverage
 		// "getcwd": true,
 		// "getcpu": true,

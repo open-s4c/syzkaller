@@ -213,8 +213,61 @@ func (ctx *context) genCalls() []*prog.Call {
 		return singleCall(ctx.genDefaultSafeCall("set_tid_address"))
 	case "wait", "wait4":
 		return singleCall(ctx.genWait4Call())
+	case "clone", "clone3":
+		return singleCall(ctx.genCloneLifecycleCall())
+	case "fork":
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_fork_wait"))
+	case "vfork":
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_vfork_wait"))
 	default:
 		return singleCall(ctx.genCall())
+	}
+}
+
+func (ctx *context) genCloneLifecycleCall() *prog.Call {
+	name := "syz_csb_fork_wait"
+	if cloneCreatesThread(ctx.currentStraceCall) {
+		name = "syz_csb_thread_create_join"
+	} else if cloneUsesVfork(ctx.currentStraceCall) {
+		name = "syz_csb_vfork_wait"
+	}
+	return ctx.genDefaultSafeCall(name)
+}
+
+func cloneCreatesThread(call *parser.Syscall) bool {
+	return traceHasCloneFlag(call, "CLONE_THREAD", 0x10000)
+}
+
+func cloneUsesVfork(call *parser.Syscall) bool {
+	return traceHasCloneFlag(call, "CLONE_VFORK", 0x4000)
+}
+
+func traceHasCloneFlag(call *parser.Syscall, name string, value uint64) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	for _, arg := range call.Args {
+		if strings.Contains(fmt.Sprint(arg), name) {
+			return true
+		}
+	}
+	flags := call.Args[0]
+	// strace prints clone as clone(child_stack=..., flags=..., ...), while
+	// clone3 keeps flags in the first field of struct clone_args.
+	if call.CallName == "clone" && len(call.Args) > 1 {
+		flags = call.Args[1]
+	}
+	return irHasFlag(flags, value)
+}
+
+func irHasFlag(arg parser.IrType, value uint64) bool {
+	switch arg := arg.(type) {
+	case parser.Constant:
+		return arg.Val()&value != 0
+	case *parser.GroupType:
+		return len(arg.Elems) != 0 && irHasFlag(arg.Elems[0], value)
+	default:
+		return false
 	}
 }
 

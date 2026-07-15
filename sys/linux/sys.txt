@@ -376,6 +376,11 @@ syz_clone(flags flags[clone_flags], stack buffer[in], stack_len bytesize[stack],
 
 syz_clone3(args ptr[in, clone_args], size bytesize[args]) pid (automatic_helper)
 
+# CSB task creation benchmarks keep creation and cleanup in one bounded call.
+syz_csb_thread_create_join() (automatic_helper)
+syz_csb_fork_wait() (automatic_helper)
+syz_csb_vfork_wait() (automatic_helper)
+
 # We need these disabled definitions to simplify the presence and the NR checking.
 clone(flags flags[clone_flags], sp buffer[in], parentid ptr[out, int32], childtid ptr[out, int32], tls buffer[in]) (breaks_returns, disabled)
 clone3(args ptr[in, clone_args], size bytesize[args]) pid (breaks_returns, disabled)

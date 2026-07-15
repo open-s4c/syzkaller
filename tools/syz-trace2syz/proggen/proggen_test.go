@@ -461,6 +461,36 @@ wait(NULL) = -1 ECHILD (No child processes)
 	}
 }
 
+func TestTaskCreationLifecycleFromTrace(t *testing.T) {
+	tests := []struct {
+		name  string
+		trace string
+		want  string
+	}{
+		{"pthread clone", `clone(child_stack=0x1234, flags=0x10f00, child_tidptr=0) = 2`, "syz_csb_thread_create_join()"},
+		{"pthread clone3", `clone3({flags=0x10000, exit_signal=0}, 88) = 2`, "syz_csb_thread_create_join()"},
+		{"process clone", `clone(child_stack=0x1234, flags=0x11) = 2`, "syz_csb_fork_wait()"},
+		{"vfork clone", `clone(child_stack=0x1234, flags=0x4111) = 2`, "syz_csb_vfork_wait()"},
+		{"fork", `fork() = 2`, "syz_csb_fork_wait()"},
+		{"vfork", `vfork() = 2`, "syz_csb_vfork_wait()"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := parseSingleProg(t, test.trace)
+			if got := strings.TrimSpace(string(p.Serialize())); got != test.want+"[2]" {
+				t.Fatalf("got %q, want %q", got, test.want+"[2]")
+			}
+			src, _, err := csource.Write(p, csource.Options{Slowdown: 1, CSB: true, Trace: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(src), test.want) {
+				t.Fatalf("generated CSB header missing %q:\n%s", test.want, src)
+			}
+		})
+	}
+}
+
 func parseSingleProg(t *testing.T, input string) *prog.Prog {
 	t.Helper()
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
