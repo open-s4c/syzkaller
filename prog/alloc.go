@@ -96,6 +96,7 @@ func (ma *memAlloc) bankruptcy() {
 	ma.next = 0
 }
 
+// advanceNext keeps the cursor on the first free granule after observed allocations.
 func (ma *memAlloc) advanceNext() {
 	for ma.next < ma.size && ma.get(ma.next) {
 		ma.next++

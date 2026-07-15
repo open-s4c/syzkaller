@@ -195,6 +195,7 @@ func (cs *defaultCallSelector) Select(call *parser.Syscall) *prog.Syscall {
 	return match
 }
 
+// cacheKey uses only variant-discriminating values and declines arguments it cannot encode safely.
 func (cs *defaultCallSelector) cacheKey(call *parser.Syscall, discriminators []int) (string, bool) {
 	var key strings.Builder
 	key.WriteString(call.CallName)
