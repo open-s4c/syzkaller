@@ -154,6 +154,7 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength bool, randomize
 	}
 	fmt.Fprintf(os.Stderr, "Parsing syscalls into syzlang\n")
 	numCalls := len(trace.Calls)
+	// Skip only the root bootstrap; a later successful exec ends that TID's original workload.
 	bootstrapExecSkipped := false
 	terminatedTIDs := make(map[int64]bool)
 	for sIdx, sCall := range trace.Calls {
@@ -681,6 +682,7 @@ func roundUp(v, unit uint64) uint64 {
 	return ((v + unit - 1) / unit) * unit
 }
 
+// execLifecycleCall selects the bounded helper matching the traced exec entry point.
 func execLifecycleCall(call *parser.Syscall) string {
 	switch call.CallName {
 	case "execve":

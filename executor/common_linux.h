@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 
+// Run exec in a child so the benchmark process survives and the lifecycle remains bounded.
 static long csb_exec_lifecycle(int kind)
 {
 	pid_t pid = fork();
