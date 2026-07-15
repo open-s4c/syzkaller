@@ -89,6 +89,7 @@ func readProg() (p *prog.Prog) {
 	return
 }
 
+// csbCommentsFromData retains only trace metadata that must survive extraction and serialization.
 func csbCommentsFromData(data []byte) []string {
 	var ret []string
 	seen := make(map[string]bool)
@@ -387,6 +388,7 @@ func serializeWithComments(p *prog.Prog) []byte {
 	return []byte(b.String())
 }
 
+// csbComments checks program and call comments because filtering can move metadata between them.
 func csbComments(p *prog.Prog) []string {
 	var ret []string
 	seen := make(map[string]bool)

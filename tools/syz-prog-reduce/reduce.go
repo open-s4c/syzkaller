@@ -86,6 +86,7 @@ func main() {
 		stats.DroppedDependency, stats.DroppedResources)
 }
 
+// serializeWithComments restores trace metadata after CloneFilter serializes only the syz program.
 func serializeWithComments(p *prog.Prog) []byte {
 	data := p.Serialize()
 	comments := csbComments(p)

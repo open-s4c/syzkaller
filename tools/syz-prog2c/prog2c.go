@@ -132,6 +132,7 @@ type openFlagConsts struct {
 	Directory uint64
 }
 
+// targetOpenFlagConsts avoids applying host or amd64 flag values to cross-architecture programs.
 func targetOpenFlagConsts(target *prog.Target) openFlagConsts {
 	return openFlagConsts{
 		Creat:     target.ConstMap["O_CREAT"],
