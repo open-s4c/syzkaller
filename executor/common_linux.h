@@ -5877,6 +5877,7 @@ static long syz_clone3(volatile long a0, volatile long a1)
 #include <signal.h>
 #include <sys/wait.h>
 
+// Exercise task creation and teardown without replaying the traced child workload.
 static void* csb_thread_exit(void* arg)
 {
 	return arg;

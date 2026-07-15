@@ -224,6 +224,7 @@ func (ctx *context) genCalls() []*prog.Call {
 	}
 }
 
+// genCloneLifecycleCall preserves the task kind while replacing its workload with a bounded helper.
 func (ctx *context) genCloneLifecycleCall() *prog.Call {
 	name := "syz_csb_fork_wait"
 	if cloneCreatesThread(ctx.currentStraceCall) {
