@@ -16,6 +16,7 @@ import (
 // 64 bytes (memAllocGranule) of program memory.
 type memAlloc struct {
 	size uint64
+	next uint64
 	mem  [memAllocL1Size]*[memAllocL0Size]uint64
 	buf  [memAllocL0Size]uint64
 }
@@ -49,6 +50,9 @@ func (ma *memAlloc) noteAlloc(addr0, size0 uint64) {
 	for i := uint64(0); i < size; i++ {
 		ma.set(addr + i)
 	}
+	if ma.next >= addr && ma.next < addr+size {
+		ma.advanceNext()
+	}
 }
 
 // alloc returns the next free address of size0 with respect to the given alignment.
@@ -62,7 +66,7 @@ func (ma *memAlloc) alloc(r *randGen, size0, alignment0 uint64) uint64 {
 	size := (size0 + memAllocGranule - 1) / memAllocGranule
 	alignment := (alignment0 + memAllocGranule - 1) / memAllocGranule
 	end := ma.size - size
-	for start := uint64(0); start <= end; start += alignment {
+	for start := alignUp(ma.next, alignment); start <= end; start += alignment {
 		empty := true
 		for i := uint64(0); i < size; i++ {
 			if ma.get(start + i) {
@@ -89,6 +93,20 @@ func (ma *memAlloc) bankruptcy() {
 			ma.mem[i1][i0] = 0
 		}
 	}
+	ma.next = 0
+}
+
+func (ma *memAlloc) advanceNext() {
+	for ma.next < ma.size && ma.get(ma.next) {
+		ma.next++
+	}
+}
+
+func alignUp(v, alignment uint64) uint64 {
+	if alignment <= 1 || v%alignment == 0 {
+		return v
+	}
+	return v + alignment - v%alignment
 }
 
 func (ma *memAlloc) pos(idx uint64) (i1, i0, bit uint64) {

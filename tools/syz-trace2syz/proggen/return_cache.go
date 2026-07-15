@@ -4,6 +4,8 @@
 package proggen
 
 import (
+	"strconv"
+
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/tools/syz-trace2syz/parser"
@@ -20,7 +22,12 @@ func returnCacheKey(syzType prog.Type, traceType parser.IrType) string {
 	if !ok {
 		log.Fatalf("caching non resource type")
 	}
-	return a.Desc.Kind[0] + "-" + traceType.String()
+	switch t := traceType.(type) {
+	case parser.Constant:
+		return a.Desc.Kind[0] + "-" + strconv.FormatUint(t.Val(), 16)
+	default:
+		return a.Desc.Kind[0] + "-" + traceType.String()
+	}
 }
 
 func (r returnCache) cache(syzType prog.Type, traceType parser.IrType, arg prog.Arg) {

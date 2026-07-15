@@ -5,10 +5,12 @@ package proggen
 
 import (
 	"bytes"
+	"strconv"
+	"strings"
+	"unicode"
+
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/tools/syz-trace2syz/parser"
-	"strconv"
-	"unicode"
 )
 
 var discriminatorArgs = map[string][]int{
@@ -44,7 +46,10 @@ type callSelector interface {
 func newSelectors(target *prog.Target, returnCache returnCache) []callSelector {
 	sc := newSelectorCommon(target, returnCache)
 	return []callSelector{
-		&defaultCallSelector{sc},
+		&defaultCallSelector{
+			selectorCommon: sc,
+			cache:          make(map[string]*prog.Syscall),
+		},
 		&openCallSelector{sc},
 	}
 }
@@ -163,6 +168,7 @@ func (cs *openCallSelector) matchOpen(meta *prog.Syscall, call *parser.Syscall) 
 
 type defaultCallSelector struct {
 	*selectorCommon
+	cache map[string]*prog.Syscall
 }
 
 // Select returns the best matching descrimination for this syscall.
@@ -172,6 +178,14 @@ func (cs *defaultCallSelector) Select(call *parser.Syscall) *prog.Syscall {
 	if len(discriminators) == 0 {
 		return nil
 	}
+	if key, ok := cs.cacheKey(call, discriminators); ok {
+		if cached, ok := cs.cache[key]; ok {
+			return cached
+		}
+		defer func() {
+			cs.cache[key] = match
+		}()
+	}
 	score := 0
 	for _, meta := range cs.callSet(call.CallName) {
 		if score1 := cs.matchCall(meta, call, discriminators); score1 > score {
@@ -179,6 +193,31 @@ func (cs *defaultCallSelector) Select(call *parser.Syscall) *prog.Syscall {
 		}
 	}
 	return match
+}
+
+func (cs *defaultCallSelector) cacheKey(call *parser.Syscall, discriminators []int) (string, bool) {
+	var key strings.Builder
+	key.WriteString(call.CallName)
+	for _, i := range discriminators {
+		if i >= len(call.Args) {
+			return "", false
+		}
+		switch arg := call.Args[i].(type) {
+		case parser.Constant:
+			key.WriteByte('|')
+			key.WriteString(strconv.Itoa(i))
+			key.WriteByte('=')
+			key.WriteString(strconv.FormatUint(arg.Val(), 16))
+		case *parser.BufferType:
+			key.WriteByte('|')
+			key.WriteString(strconv.Itoa(i))
+			key.WriteByte('=')
+			key.WriteString(arg.Val)
+		default:
+			return "", false
+		}
+	}
+	return key.String(), true
 }
 
 // matchCall returns match score between meta and call.
