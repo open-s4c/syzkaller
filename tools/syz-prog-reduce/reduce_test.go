@@ -85,6 +85,82 @@ func TestUsedResourcesIncludesInOutDependencies(t *testing.T) {
 	}
 }
 
+func TestReduceProgKeepsEverySyscallVariantWithDependencies(t *testing.T) {
+	p := testProg(t, ""+
+		"r0 = test$res2()\n"+
+		"mutate6(r0, &(0x7f0000000040)=\"abcd\", 0x4)\n"+
+		"r1 = mutate5(&(0x7f0000000080)='./file\\x00', 0x0)\n"+
+		"mutate6(r1, &(0x7f00000000c0)=\"abcd\", 0x4)\n")
+	reduced, _ := reduceProg(p, reduceOptions{
+		MaxCalls:          1,
+		MaxMotifInstances: 1,
+		MaxLiveResources:  1,
+		IncludeConsts:     true,
+	})
+	variants := make(map[string]bool)
+	for _, call := range reduced.Calls {
+		variants[call.Meta.Name] = true
+	}
+	for _, name := range []string{"test$res2", "mutate5", "mutate6"} {
+		if !variants[name] {
+			t.Fatalf("missing syscall variant %q:\n%s", name, reduced.Serialize())
+		}
+	}
+	if _, err := reduced.SerializeForExec(); err != nil {
+		t.Fatalf("reduced program is not executable: %v\n%s", err, reduced.Serialize())
+	}
+}
+
+func TestReduceProgRestoresMotifFrequenciesWithRerun(t *testing.T) {
+	p := testProg(t, repeatedFilesProg(10))
+	reduced, stats := reduceProg(p, reduceOptions{
+		MaxCalls:          0,
+		MaxMotifInstances: 3,
+		MaxLiveResources:  0,
+		KeepFirst:         1,
+		KeepLast:          1,
+		IncludeConsts:     true,
+	})
+	weighted := make(map[string]int)
+	for _, call := range reduced.Calls {
+		weighted[call.Meta.Name] += 1 + call.Props.Rerun
+	}
+	if weighted["mutate5"] != 10 || weighted["mutate6"] != 10 {
+		t.Fatalf("weighted calls = %v, want mutate5=10 mutate6=10\n%s", weighted, reduced.Serialize())
+	}
+	if stats.WeightedCalls != len(p.Calls) {
+		t.Fatalf("weighted calls = %d, want %d", stats.WeightedCalls, len(p.Calls))
+	}
+}
+
+func TestReduceProgDoesNotCombineFailNthAndRerun(t *testing.T) {
+	p := testProg(t, ""+
+		"test() (fail_nth: 1)\n"+
+		"test()\n"+
+		"test() (fail_nth: 2)\n"+
+		"test()\n")
+	reduced, stats := reduceProg(p, reduceOptions{
+		MaxCalls:          0,
+		MaxMotifInstances: 1,
+		MaxLiveResources:  0,
+		IncludeConsts:     true,
+	})
+	weighted := 0
+	for _, call := range reduced.Calls {
+		if call.Props.FailNth > 0 && call.Props.Rerun > 0 {
+			t.Fatalf("call combines fail_nth and rerun:\n%s", reduced.Serialize())
+		}
+		weighted += 1 + call.Props.Rerun
+	}
+	if weighted != len(p.Calls) || stats.WeightedCalls != len(p.Calls) {
+		t.Fatalf("weighted calls = %d/%d, want %d\n%s", weighted, stats.WeightedCalls,
+			len(p.Calls), reduced.Serialize())
+	}
+	if _, err := reduced.SerializeForExec(); err != nil {
+		t.Fatalf("reduced program is not executable: %v\n%s", err, reduced.Serialize())
+	}
+}
+
 func TestReduceProgHonorsLiveResourceCap(t *testing.T) {
 	p := testProg(t, ""+
 		"r0 = test$res2()\n"+
