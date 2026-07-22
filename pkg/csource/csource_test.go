@@ -500,3 +500,17 @@ func TestLoopIdenticalCalls(t *testing.T) {
 		}
 	}
 }
+
+func TestCSBIgnoresSIGPIPE(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _, err := Write(&prog.Prog{Target: target}, Options{CSB: true, Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "signal(SIGPIPE, SIG_IGN)") {
+		t.Fatal("CSB registration does not ignore SIGPIPE")
+	}
+}

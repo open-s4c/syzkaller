@@ -30,6 +30,10 @@
 
 #endif
 
+#if CSB
+#include <signal.h>
+#endif
+
 #if GOOS_freebsd || GOOS_test && HOSTGOOS_freebsd
 #include <sys/endian.h> // for htobe*.
 #elif GOOS_darwin
@@ -923,6 +927,9 @@ void UNIQUE_FUNC(loop)(void)
 static inline int
 UNIQUE_FUNC(bm_target_reg)(thread_ctx_t* ctx)
 {
+	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+		return -1;
+	}
 	/*{{{SYSCALLS_NET_SRV_REG}}}*/
 	return 0;
 }
