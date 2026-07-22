@@ -840,6 +840,13 @@ func (ctx *context) genStruct(syzType *prog.StructType, dir prog.Dir, traceType 
 	var args []prog.Arg
 	switch a := traceType.(type) {
 	case *parser.GroupType:
+		// strace nests BPF_PROG_QUERY fields under query={} and may append
+		// extra_data for bytes beyond the decoded query structure.
+		if syzType.Name() == "bpf_prog_query" && len(a.Elems) != 0 {
+			if query, ok := a.Elems[0].(*parser.GroupType); ok {
+				a = query
+			}
+		}
 		j := 0
 		if ret, recursed := ctx.recurseStructs(syzType, dir, a); recursed {
 			return ret

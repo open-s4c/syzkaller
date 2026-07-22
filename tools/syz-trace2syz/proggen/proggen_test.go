@@ -255,6 +255,11 @@ r0 = socket$inet6_tcp(0xa, 0x1, 0x0)[3]
 setsockopt$inet6_MCAST_JOIN_GROUP(r0, 0x29, 0x2a, &(0x7f0000000000)={0x0, {{0xa, 0x0, 0x0, @rand_addr='\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'}}}, 0x88)[0]
 `,
 		}, {
+			`bpf(0x10, {query={target_fd=13, attach_type=0x6, query_flags=0, attach_flags=0, ` +
+				`prog_ids=[], prog_cnt=64 => 0}, extra_data="\x00\x00"}, 64) = 0`,
+			`bpf$BPF_PROG_QUERY(0x10, &(0x7f0000000040)={@cgroup=0xd, 0x6, 0x0, 0x0, ` +
+				`&(0x7f0000000000), 0x40}, 0x40)[0]`,
+		}, {
 			`
 openat(-100, "\x2f\x64\x65\x76\x2f\x72\x74\x63\x30", 0) = 3
 ioctl(3, 0x4028700f, {enabled=0, pending=0, time={tm_sec=0, tm_min=0, tm_hour=0, tm_mday=0, tm_mon=65536,` +
