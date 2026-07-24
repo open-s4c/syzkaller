@@ -51,32 +51,20 @@ type NetOpSize struct {
 	Size uint64
 }
 
-var (
-	missedFDResources = make(map[uint64](bool))
-	connectFDs        = make(map[uint64](bool))
-	acceptFDs         = make(map[uint64](bool))
-	readFDSizes       = make(map[uint64](uint64))
-	NetOpsFDs         = make(map[uint64]([]NetOpSize))
-	NetOpsFDsConnect  = make(map[uint64]([]NetOpSize))
-	NetOpsFDsAccept   = make(map[uint64]([]NetOpSize))
-	listenFDs         = make(map[uint64](bool))
-	initFDs           = make(map[uint64](bool))
-)
-
-func AddToNetOps(res uint64, op NetOp, size uint64) {
-	netops, ok := NetOpsFDs[res]
+func (ctx *context) addToNetOps(res uint64, op NetOp, size uint64) {
+	netops, ok := ctx.netOpsFDs[res]
 
 	// no operation for this file descriptor recorded yet, initialize
 	if !ok {
-		NetOpsFDs[res] = make([]NetOpSize, 0)
-		netops = NetOpsFDs[res]
+		ctx.netOpsFDs[res] = make([]NetOpSize, 0)
+		netops = ctx.netOpsFDs[res]
 	}
 
 	// empty list of operations, or current operation is write -> append
 	if len(netops) == 0 || op == NetWrite {
 		nosNew := NetOpSize{op, 1, size}
 		netops = append(netops, nosNew)
-		NetOpsFDs[res] = netops
+		ctx.netOpsFDs[res] = netops
 		return
 	}
 
@@ -85,14 +73,14 @@ func AddToNetOps(res uint64, op NetOp, size uint64) {
 	if nosLast.Op == NetWrite {
 		nosNew := NetOpSize{op, 1, size}
 		netops = append(netops, nosNew)
-		NetOpsFDs[res] = netops
+		ctx.netOpsFDs[res] = netops
 		return
 	}
 
 	// Last op was also Read, combine into total
 	nosNew := NetOpSize{op, nosLast.Num + 1, nosLast.Size + size}
 	netops[len(netops)-1] = nosNew
-	NetOpsFDs[res] = netops
+	ctx.netOpsFDs[res] = netops
 }
 
 var netOpName = map[NetOp]string{
@@ -130,35 +118,62 @@ func Write(p *prog.Prog, opts Options) (program []byte, metaData string, err err
 	if err := opts.Check(p.Target.OS); err != nil {
 		return nil, "", fmt.Errorf("csource: invalid opts: %w", err)
 	}
-	resetGenerationState()
 	ctx := &context{
-		p:         p,
-		opts:      opts,
-		target:    p.Target,
-		sysTarget: targets.Get(p.Target.OS, p.Target.Arch),
-		calls:     make(map[string]uint64),
+		p:                 p,
+		opts:              opts,
+		target:            p.Target,
+		sysTarget:         targets.Get(p.Target.OS, p.Target.Arch),
+		calls:             make(map[string]uint64),
+		missedFDResources: make(map[uint64]bool),
+		connectFDs:        make(map[uint64]bool),
+		acceptFDs:         make(map[uint64]bool),
+		readFDSizes:       make(map[uint64]uint64),
+		netOpsFDs:         make(map[uint64][]NetOpSize),
+		listenFDs:         make(map[uint64]bool),
+		initFDs:           make(map[uint64]bool),
 	}
 	return ctx.generateSource()
 }
 
-func resetGenerationState() {
-	missedFDResources = make(map[uint64]bool)
-	connectFDs = make(map[uint64]bool)
-	acceptFDs = make(map[uint64]bool)
-	readFDSizes = make(map[uint64]uint64)
-	NetOpsFDs = make(map[uint64][]NetOpSize)
-	NetOpsFDsConnect = make(map[uint64][]NetOpSize)
-	NetOpsFDsAccept = make(map[uint64][]NetOpSize)
-	listenFDs = make(map[uint64]bool)
-	initFDs = make(map[uint64]bool)
+type context struct {
+	p                 *prog.Prog
+	opts              Options
+	target            *prog.Target
+	sysTarget         *targets.Target
+	calls             map[string]uint64 // CallName -> NR
+	missedFDResources map[uint64]bool
+	connectFDs        map[uint64]bool
+	acceptFDs         map[uint64]bool
+	readFDSizes       map[uint64]uint64
+	netOpsFDs         map[uint64][]NetOpSize
+	netOpsFDsConnect  map[uint64][]NetOpSize
+	netOpsFDsAccept   map[uint64][]NetOpSize
+	listenFDs         map[uint64]bool
+	initFDs           map[uint64]bool
 }
 
-type context struct {
-	p         *prog.Prog
-	opts      Options
-	target    *prog.Target
-	sysTarget *targets.Target
-	calls     map[string]uint64 // CallName -> NR
+func (ctx *context) ensureGenerationState() {
+	if ctx.missedFDResources == nil {
+		ctx.missedFDResources = make(map[uint64]bool)
+	}
+	if ctx.connectFDs == nil {
+		ctx.connectFDs = make(map[uint64]bool)
+	}
+	if ctx.acceptFDs == nil {
+		ctx.acceptFDs = make(map[uint64]bool)
+	}
+	if ctx.readFDSizes == nil {
+		ctx.readFDSizes = make(map[uint64]uint64)
+	}
+	if ctx.netOpsFDs == nil {
+		ctx.netOpsFDs = make(map[uint64][]NetOpSize)
+	}
+	if ctx.listenFDs == nil {
+		ctx.listenFDs = make(map[uint64]bool)
+	}
+	if ctx.initFDs == nil {
+		ctx.initFDs = make(map[uint64]bool)
+	}
 }
 
 func generateSandboxFunctionSignature(sandboxName string, sandboxArg int, ctx *context) string {
@@ -235,6 +250,7 @@ func toStringArray[V uint64 | string | []NetOpSize](opMap map[uint64]V) (string,
 }
 
 func (ctx *context) generateSource() ([]byte, string, error) {
+	ctx.ensureGenerationState()
 	metaData := ""
 
 	ctx.filterCalls()
@@ -299,13 +315,13 @@ func (ctx *context) generateSource() ([]byte, string, error) {
 
 	// Leaking file descriptors
 	closeBuf := new(bytes.Buffer)
-	for _, fdRes := range sortedUint64AnyKeys(missedFDResources) {
-		if !missedFDResources[fdRes] {
+	for _, fdRes := range sortedUint64AnyKeys(ctx.missedFDResources) {
+		if !ctx.missedFDResources[fdRes] {
 			continue
 		}
 		// only close file descriptors that are not part if the reg init function
 		// TODO: check the potential usage of initFDs below, and in the whole file.
-		if _, ok := listenFDs[fdRes]; !ok {
+		if _, ok := ctx.listenFDs[fdRes]; !ok {
 			fmt.Fprintf(closeBuf, "\tclose(UNIQUE_VAR(ctx->r)[%v]);\n", fdRes)
 		}
 	}
@@ -369,7 +385,7 @@ func (ctx *context) generateSource() ([]byte, string, error) {
 
 	// Get number of listen annotations
 	var callsNetSrvDereg []string
-	for _, rIdx := range sortedUint64AnyKeys(listenFDs) {
+	for _, rIdx := range sortedUint64AnyKeys(ctx.listenFDs) {
 		callsNetSrvDereg = append(callsNetSrvDereg, fmt.Sprintf("\tclose(UNIQUE_VAR(ctx->r)[%d]);", rIdx))
 	}
 	callsNetSrvDereg = append(callsNetSrvDereg, "\tfree(UNIQUE_VAR(ctx->r));")
@@ -457,22 +473,22 @@ func (ctx *context) generateSource() ([]byte, string, error) {
 		header += "const static uint64_t UNIQUE_VAR(maxWriteBufferSizeAlignment) = " + fmt.Sprintf("%d", ctx.opts.MaxWriteSizeAlignment) + "ul;\n"
 
 		// Connect NetOps
-		opsSeq, err := toStringArray(NetOpsFDsConnect)
+		opsSeq, err := toStringArray(ctx.netOpsFDsConnect)
 		if err != nil {
 			return nil, "", err
 		}
-		header += fmt.Sprintf("const char* UNIQUE_VAR(netops_connect)[%d] = {%s};\n", len(NetOpsFDsConnect), opsSeq)
+		header += fmt.Sprintf("const char* UNIQUE_VAR(netops_connect)[%d] = {%s};\n", len(ctx.netOpsFDsConnect), opsSeq)
 		// Add to meta data if there is networking sequence
 		if opsSeq != "" {
 			metaData += fmt.Sprintf("CLIENT_SEQ=%s\n", opsSeq)
 		}
 
 		// Accept NetOps
-		opsSeq, err = toStringArray(NetOpsFDsAccept)
+		opsSeq, err = toStringArray(ctx.netOpsFDsAccept)
 		if err != nil {
 			return nil, "", err
 		}
-		header += fmt.Sprintf("const char* UNIQUE_VAR(netops_accept)[%d] = {%s};\n", len(NetOpsFDsAccept), opsSeq)
+		header += fmt.Sprintf("const char* UNIQUE_VAR(netops_accept)[%d] = {%s};\n", len(ctx.netOpsFDsAccept), opsSeq)
 		// Add to meta data if there is networking sequence
 		if opsSeq != "" {
 			metaData += fmt.Sprintf("SERVER_SEQ=%s\n", opsSeq)
@@ -610,6 +626,7 @@ func generateComment(call *prog.Call) string {
 
 func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool, initIndices []int,
 	dataMmap bool) ([]string, []uint64, error) {
+	ctx.ensureGenerationState()
 	msgSizes := make([]uint64, len(p.Calls))
 	var comments []string
 	if addComments {
@@ -725,7 +742,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 		// get resource indices for filedescriptor related calls
 		if resCopyout {
 			fdRes := call.Index
-			missedFDResources[fdRes] = true
+			ctx.missedFDResources[fdRes] = true
 		}
 
 		callName, ok := ctx.sysTarget.SyscallTrampolines[call.Meta.CallName]
@@ -735,7 +752,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 		if callName == "close" {
 			arg := call.Args[0]
 			fdRes := arg.(prog.ExecArgResult).Index
-			missedFDResources[fdRes] = false
+			ctx.missedFDResources[fdRes] = false
 		}
 
 		if callName == "read" || callName == "pread" || callName == "pread64" || callName == "recv" || callName == "recvfrom" {
@@ -744,14 +761,14 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 
 			arg2 := call.Args[2]
 			size := arg2.(prog.ExecArgConst).Value
-			AddToNetOps(fdRes, NetRead, size)
+			ctx.addToNetOps(fdRes, NetRead, size)
 		}
 
 		if callName == "recvmsg" {
 			arg0 := call.Args[0]
 			fdRes := arg0.(prog.ExecArgResult).Index
 
-			AddToNetOps(fdRes, NetRead, msgSizes[ci])
+			ctx.addToNetOps(fdRes, NetRead, msgSizes[ci])
 		}
 
 		if callName == "write" || callName == "pwrite" || callName == "pwrite64" || callName == "send" || callName == "sendto" {
@@ -760,58 +777,58 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 
 			arg2 := call.Args[2]
 			size := arg2.(prog.ExecArgConst).Value
-			AddToNetOps(fdRes, NetWrite, size)
+			ctx.addToNetOps(fdRes, NetWrite, size)
 		}
 
 		if callName == "sendmsg" {
 			arg0 := call.Args[0]
 			fdRes := arg0.(prog.ExecArgResult).Index
 
-			AddToNetOps(fdRes, NetWrite, msgSizes[ci])
+			ctx.addToNetOps(fdRes, NetWrite, msgSizes[ci])
 		}
 
 		if callName == "connect" {
 			arg0 := call.Args[0]
 			fdRes := arg0.(prog.ExecArgResult).Index
 
-			connectFDs[fdRes] = true
+			ctx.connectFDs[fdRes] = true
 		}
 
 		if callName == "listen" {
 			arg0 := call.Args[0]
 			fdRes := arg0.(prog.ExecArgResult).Index
 
-			listenFDs[fdRes] = true
+			ctx.listenFDs[fdRes] = true
 		}
 
 		if callName == "accept" || callName == "accept4" {
 			fdRes := call.Index
 
-			acceptFDs[fdRes] = true
+			ctx.acceptFDs[fdRes] = true
 		}
 	}
 
 	// remove resources from network ops which are not created by a connect
 
 	tmpOps := make(map[uint64]([]NetOpSize))
-	for res := range connectFDs {
-		nop, ok := NetOpsFDs[res]
+	for res := range ctx.connectFDs {
+		nop, ok := ctx.netOpsFDs[res]
 		if ok {
 			tmpOps[res] = nop
 		}
 	}
 
-	NetOpsFDsConnect = tmpOps
+	ctx.netOpsFDsConnect = tmpOps
 
 	tmpOps = make(map[uint64]([]NetOpSize))
-	for _, res := range sortedUint64AnyKeys(acceptFDs) {
-		nop, ok := NetOpsFDs[res]
+	for _, res := range sortedUint64AnyKeys(ctx.acceptFDs) {
+		nop, ok := ctx.netOpsFDs[res]
 		if ok {
 			tmpOps[res] = nop
 		}
 	}
 
-	NetOpsFDsAccept = tmpOps
+	ctx.netOpsFDsAccept = tmpOps
 
 	return calls, p.Vars
 }
@@ -1017,7 +1034,7 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, initCall, dataMmap bool) str
 			argsStrs = append(argsStrs, com+handleBigEndian(arg, ctx.constArgToStr(arg, native))+PTR_OFFSET_STR)
 		case prog.ExecArgResult:
 			if initCall {
-				initFDs[arg.Index] = true
+				ctx.initFDs[arg.Index] = true
 			}
 			if arg.Format != prog.FormatNative && arg.Format != prog.FormatBigEndian {
 				panic("string format in syscall argument")
@@ -1177,7 +1194,7 @@ func (ctx *context) copyout(w *bytes.Buffer, call prog.ExecCall, resCopyout bool
 	}
 	fmt.Fprintf(w, "\n")
 	if resCopyout {
-		initFDs[call.Index] = true
+		ctx.initFDs[call.Index] = true
 		fmt.Fprintf(w, "\t\t%v[%v] = res;\n", ctx.resultArrayName(), call.Index)
 	}
 	for _, copyout := range call.Copyout {

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -107,6 +108,30 @@ func TestCSBReappliesCurrentAffinity(t *testing.T) {
 	assert.Contains(t, string(src), "static __thread cpu_set_t* mask = NULL")
 	assert.Contains(t, string(src), "mask = CPU_ALLOC(cpus)")
 	assert.Contains(t, string(src), "sched_getaffinity(0, mask_size, mask)")
+}
+
+func TestConcurrentCSBWrite(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := target.Deserialize([]byte(
+		"r0 = openat(0xffffffffffffff9c, &(0x7f0000000000)='./file\\x00', 0x42, 0x1ff)\n"), prog.NonStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 16
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, err := Write(p, Options{CSB: true, Slowdown: 1}); err != nil {
+				t.Errorf("concurrent Write failed: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func assertCSBExecIdentifiersNamespaced(t *testing.T, src []byte) {
