@@ -109,6 +109,59 @@ func TestCSBReappliesCurrentAffinity(t *testing.T) {
 	assert.Contains(t, string(src), "sched_getaffinity(0, mask_size, mask)")
 }
 
+func TestCSBInvalidatesResultsBeforeCalls(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := target.Deserialize([]byte(
+		"r0 = openat(0xffffffffffffff9c, &(0x7f0000000000)='file\\x00', 0x0, 0x0)\n"+
+			"close(r0)\n"+
+			"pipe(&(0x7f0000000040)={<r1=>0x0, <r2=>0x0})\n"+
+			"close(r1)\nclose(r2)\n"), prog.NonStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _, err := Write(p, Options{CSB: true, Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"UNIQUE_VAR(ctx->r)[0] = 0xffffffffffffffff;",
+		"UNIQUE_VAR(ctx->r)[1] = 0xffffffffffffffff;",
+		"UNIQUE_VAR(ctx->r)[2] = 0xffffffffffffffff;",
+	} {
+		assert.Contains(t, string(src), want)
+	}
+	assert.Less(t, strings.Index(string(src), "UNIQUE_VAR(ctx->r)[0] = 0xffffffffffffffff;"),
+		strings.Index(string(src), "res = syscall(__NR_openat"))
+	p.Calls[0].Props.Async = true
+	src, _, err = Write(p, Options{CSB: true, Threaded: true, Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Contains(t, string(src), "for (call = 0; call < 5; call++) {\n\tswitch (call) {\n"+
+		"\tcase 0:\n\t\tUNIQUE_VAR(ctx->r)[0] = 0xffffffffffffffff;\n\t\tbreak;")
+	assert.Contains(t, string(src), "\tcase 2:\n\t\tUNIQUE_VAR(ctx->r)[1] = 0xffffffffffffffff;\n"+
+		"\t\tUNIQUE_VAR(ctx->r)[2] = 0xffffffffffffffff;\n\t\tbreak;")
+	assert.Less(t, strings.Index(string(src), "__atomic_load_n(&UNIQUE_VAR(running), __ATOMIC_ACQUIRE)"),
+		strings.Index(string(src), "UNIQUE_VAR(ctx->r)[0] = 0xffffffffffffffff;"))
+	src, _, err = Write(p, Options{Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.NotContains(t, string(src), "r[0] = -1;")
+	p, err = target.Deserialize([]byte("r0 = add_key(0x0, 0x0, 0x0, 0x0, 0x0)\nkeyctl$revoke(0x3, r0)\n"), prog.NonStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _, err = Write(p, Options{CSB: true, Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Contains(t, string(src), "UNIQUE_VAR(ctx->r)[0] = 0x0;")
+}
+
 func assertCSBExecIdentifiersNamespaced(t *testing.T, src []byte) {
 	t.Helper()
 	// Strip text that cannot declare or reference a C identifier. In particular,
@@ -446,7 +499,7 @@ syscall(SYS_csource8, /*num=*/(intptr_t)-1);
 			// Disable comment generation, as it's not the focus of these tests.
 			// This simplifies the expected output. For tests covering comments, see
 			// /pkg/csource/syscall_generation_test.go.
-			calls, _, err := ctx.generateProgCalls(p, false, false, nil, false)
+			calls, _, _, err := ctx.generateProgCalls(p, false, false, nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}

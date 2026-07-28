@@ -636,7 +636,7 @@ static void* UNIQUE_FUNC(thr)(void* arg)
 		UNIQUE_FUNC(event_wait)(&th->ready);
 		UNIQUE_FUNC(event_reset)(&th->ready);
 		UNIQUE_FUNC(execute_call)(th->call);
-		__atomic_fetch_sub(&UNIQUE_VAR(running), 1, __ATOMIC_RELAXED);
+		__atomic_fetch_sub(&UNIQUE_VAR(running), 1, __ATOMIC_RELEASE);
 		UNIQUE_FUNC(event_set)(&th->done);
 	}
 	return 0;
@@ -663,8 +663,17 @@ static void UNIQUE_FUNC(loop)(void)
 #if SYZ_TRACE
 	fprintf(stderr, "### start\n");
 #endif
+#if CSB
+	// A timed-out async worker can still publish results from the prior dispatch.
+	// Skip this dispatch until it has drained rather than resetting underneath it.
+	if (__atomic_load_n(&UNIQUE_VAR(running), __ATOMIC_ACQUIRE))
+		return;
+#endif
 	int i, call, thread;
 	for (call = 0; call < /*{{{NUM_CALLS}}}*/; call++) {
+#if CSB
+/*{{{RESULT_RESETS}}}*/
+#endif
 		for (thread = 0; thread < (int)(sizeof(threads) / sizeof(threads[0])); thread++) {
 			struct thread_t* th = &threads[thread];
 			if (!th->created) {
