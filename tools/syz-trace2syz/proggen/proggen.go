@@ -13,6 +13,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/google/syzkaller/pkg/log"
@@ -158,13 +159,12 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength, randomized, ma
 	}
 	fmt.Fprintf(os.Stderr, "Parsing syscalls into syzlang\n")
 	numCalls := len(trace.Calls)
-	// Skip only the root bootstrap; a later successful exec ends that TID's original workload.
-	bootstrapExecSkipped := false
-	var rootPID int64
-	if len(trace.Calls) != 0 {
-		rootPID = trace.Calls[0].Pid
+	// Skip only the initial root exec sequence; later successful execs are workload.
+	bootstrapSequence := skipBootstrapExec
+	rootTID := int64(0)
+	if numCalls != 0 {
+		rootTID = trace.Calls[0].Pid
 	}
-	terminatedTIDs := make(map[int64]bool)
 	for sIdx, sCall := range trace.Calls {
 		if sIdx%1000 == 0 {
 			status = fmt.Sprintf("-- Progress [%03.1f/100%%] --", (100.0 * float32(sIdx) / float32(numCalls)))
@@ -177,12 +177,14 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength, randomized, ma
 			// 2179  --- SIGUSR1 {si_signo=SIGUSR1, si_code=SI_USER, si_pid=2180, si_uid=0} ---
 			continue
 		}
-		if terminatedTIDs[sCall.Pid] {
-			continue
-		}
-		if skipBootstrapExec && !bootstrapExecSkipped && sCall.Pid == rootPID && isSuccessfulExec(sCall) {
-			bootstrapExecSkipped = true
-			continue
+		isExec := sCall.CallName == "execve" || sCall.CallName == "execveat"
+		if bootstrapSequence {
+			if sCall.Pid != rootTID || !isExec {
+				bootstrapSequence = false
+			} else if sCall.Ret == 0 {
+				bootstrapSequence = false
+				continue
+			}
 		}
 		if shouldSkip(sCall) {
 			continue
@@ -197,10 +199,6 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength, randomized, ma
 				fmt.Fprintf(os.Stderr, "%s\r", strings.Repeat(" ", len(status)))
 				log.Fatalf("%v", err)
 			}
-		}
-		// Later calls from this TID belong to the replacement image.
-		if isSuccessfulExec(sCall) {
-			terminatedTIDs[sCall.Pid] = true
 		}
 	}
 	fmt.Fprintf(os.Stderr, "%s\r", strings.Repeat(" ", len(status)))
@@ -258,9 +256,151 @@ func (ctx *context) genCalls() []*prog.Call {
 		return singleCall(ctx.genTaskLifecycleCall("syz_csb_fork_wait"))
 	case "vfork":
 		return singleCall(ctx.genTaskLifecycleCall("syz_csb_vfork_wait"))
+	case "io_setup", "io_getevents", "io_pgetevents", "io_destroy", "io_submit", "io_cancel":
+		// Trace AIO contexts and iocb pointers are process-local. Exercise the
+		// requested syscall through a helper that owns a complete, bounded AIO lifecycle.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName))
+	case "exit", "exit_group":
+		// Terminate a disposable child so the repeated CSB worker remains alive.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName))
+	case "rt_sigaction":
+		return singleCall(ctx.genRtSigactionCall())
 	default:
 		return singleCall(ctx.genCall())
 	}
+}
+
+func (ctx *context) genRtSigactionCall() *prog.Call {
+	traceCall := ctx.currentStraceCall
+	if len(traceCall.Args) < 2 {
+		return nil
+	}
+	if traceCall.Ret < 0 {
+		return nil
+	}
+	// A NULL action is a read-only query and is safe to replay directly.
+	if action, ok := traceCall.Args[1].(parser.Constant); ok && action.Val() == 0 {
+		return ctx.genCall()
+	}
+	sig := ctx.signalNumber(traceCall.Args[0])
+	// libc reserves signals 32 and 33, while its sigaction layout is not the
+	// kernel ABI required for safely bypassing the wrapper.
+	if sig == 0 || sig == 32 || sig == 33 {
+		return nil
+	}
+	call := ctx.makeDefaultCall("syz_csb_rt_sigaction")
+	if call == nil {
+		return nil
+	}
+	ctx.setConstArg(call, 0, sig)
+	if action, ok := traceCall.Args[1].(*parser.GroupType); ok {
+		if len(action.Elems) > 1 {
+			mask := ctx.sigsetMask(action.Elems[1])
+			for i := range mask {
+				ctx.setConstArg(call, 2+i, mask[i])
+			}
+		}
+		if len(action.Elems) > 2 {
+			ctx.setConstArg(call, 1, ctx.sigactionFlags(action.Elems[2]))
+		}
+	}
+	ctx.finishCall(call, traceCall)
+	return call
+}
+
+func (ctx *context) sigsetMask(arg parser.IrType) [4]uint64 {
+	if group, ok := arg.(*parser.GroupType); ok {
+		var mask [4]uint64
+		for _, elem := range group.Elems {
+			elemMask := ctx.sigsetMask(elem)
+			for i := range mask {
+				mask[i] |= elemMask[i]
+			}
+		}
+		if group.Complement {
+			words := 2
+			if ctx.target.Arch == "mips64le" {
+				words = 4
+			}
+			for i := 0; i < words; i++ {
+				mask[i] = ^mask[i] & 0xffffffff
+			}
+		}
+		return mask
+	}
+	sig := ctx.signalNumber(arg)
+	if sig == 0 || sig > 128 {
+		return [4]uint64{}
+	}
+	var mask [4]uint64
+	mask[(sig-1)/32] = uint64(1) << ((sig - 1) % 32)
+	return mask
+}
+
+func (ctx *context) signalNumber(arg parser.IrType) uint64 {
+	if value, ok := arg.(parser.Constant); ok {
+		return value.Val()
+	}
+	buffer, ok := arg.(*parser.BufferType)
+	if !ok {
+		return 0
+	}
+	name := strings.TrimPrefix(buffer.Val, "SIG")
+	if suffix := strings.TrimPrefix(name, "RT_"); suffix != name {
+		offset, err := strconv.ParseUint(suffix, 10, 8)
+		maxOffset := uint64(32)
+		if ctx.target.Arch == "mips64le" {
+			maxOffset = 95
+		}
+		if err == nil && offset <= maxOffset {
+			return 32 + offset
+		}
+	}
+	if name == "RTMIN" {
+		return 32
+	}
+	if name == "RTMAX" {
+		if ctx.target.Arch == "mips64le" {
+			return 127
+		}
+		return 64
+	}
+	generic := map[string]uint64{
+		"HUP": 1, "INT": 2, "QUIT": 3, "ILL": 4, "TRAP": 5, "ABRT": 6,
+		"BUS": 7, "FPE": 8, "KILL": 9, "USR1": 10, "SEGV": 11, "USR2": 12,
+		"PIPE": 13, "ALRM": 14, "TERM": 15, "STKFLT": 16, "CHLD": 17,
+		"CONT": 18, "STOP": 19, "TSTP": 20, "TTIN": 21, "TTOU": 22,
+		"URG": 23, "XCPU": 24, "XFSZ": 25, "VTALRM": 26, "PROF": 27,
+		"WINCH": 28, "IO": 29, "PWR": 30, "SYS": 31,
+	}
+	if ctx.target.Arch != "mips64le" {
+		return generic[name]
+	}
+	return map[string]uint64{
+		"HUP": 1, "INT": 2, "QUIT": 3, "ILL": 4, "TRAP": 5, "ABRT": 6,
+		"EMT": 7, "FPE": 8, "KILL": 9, "BUS": 10, "SEGV": 11, "SYS": 12,
+		"PIPE": 13, "ALRM": 14, "TERM": 15, "USR1": 16, "USR2": 17,
+		"CHLD": 18, "PWR": 19, "WINCH": 20, "URG": 21, "IO": 22,
+		"STOP": 23, "TSTP": 24, "CONT": 25, "TTIN": 26, "TTOU": 27,
+		"VTALRM": 28, "PROF": 29, "XCPU": 30, "XFSZ": 31,
+	}[name]
+}
+
+func (ctx *context) sigactionFlags(arg parser.IrType) uint64 {
+	if value, ok := arg.(parser.Constant); ok {
+		return value.Val()
+	}
+	text := fmt.Sprint(arg)
+	var flags uint64
+	for _, name := range []string{
+		"SA_NOCLDSTOP", "SA_NOCLDWAIT", "SA_SIGINFO", "SA_ONSTACK",
+		"SA_RESTART", "SA_NODEFER", "SA_RESETHAND",
+	} {
+		if strings.Contains(text, name) {
+			flags |= ctx.target.ConstMap[name]
+		}
+	}
+	return flags
 }
 
 var sanitizedCallMinArgs = map[string]int{

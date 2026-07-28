@@ -823,9 +823,9 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 			callName = call.Meta.CallName
 		}
 		if callName == "close" {
-			arg := call.Args[0]
-			fdRes := arg.(prog.ExecArgResult).Index
-			missedFDResources[fdRes] = false
+			if arg, ok := call.Args[0].(prog.ExecArgResult); ok {
+				missedFDResources[arg.Index] = false
+			}
 		}
 
 		if callName == "read" || callName == "pread" || callName == "pread64" || callName == "recv" || callName == "recvfrom" {
@@ -1086,8 +1086,8 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, initCall bool, ci int, force
 		funcName = callName
 		// Multiple generated CSB headers share a translation unit, so calls must
 		// use the same header-local name as their UNIQUE_FUNC declarations.
-		if ctx.opts.CSB && (strings.HasPrefix(callName, "syz_csb_exec") ||
-			callName == "syz_csb_fexecve" || callName == "syz_reapply_affinity") {
+		if ctx.opts.CSB && (strings.HasPrefix(callName, "syz_csb_") ||
+			callName == "syz_reapply_affinity") {
 			funcName = fmt.Sprintf("UNIQUE_FUNC(%v)", callName)
 		}
 	} else {

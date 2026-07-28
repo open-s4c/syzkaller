@@ -89,6 +89,17 @@ func TestLinuxSyscalls(t *testing.T) {
 	}
 }
 
+func TestCSBSyscallsHaveChecks(t *testing.T) {
+	target := testConfig(t, targets.Linux, targets.AMD64).Target
+	for _, call := range target.Syscalls {
+		if strings.HasPrefix(call.CallName, "syz_csb_") {
+			if _, ok := linuxSyscallChecks[call.CallName]; !ok {
+				t.Errorf("%s has no syscall check", call.CallName)
+			}
+		}
+	}
+}
+
 func TestReadKVMInfo(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("not linux")

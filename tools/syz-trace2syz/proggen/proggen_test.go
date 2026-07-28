@@ -643,8 +643,9 @@ func TestTaskCreationLifecycleFromTrace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(src), test.want) {
-				t.Fatalf("generated CSB header missing %q:\n%s", test.want, src)
+			helper := "UNIQUE_FUNC(" + strings.TrimSuffix(test.want, "()") + ")()"
+			if !strings.Contains(string(src), helper) {
+				t.Fatalf("generated CSB header missing %q:\n%s", helper, src)
 			}
 		})
 	}
@@ -707,6 +708,93 @@ func TestTaskCreationLifecycleCompiles(t *testing.T) {
 	}
 }
 
+func TestAIOCallsUseBoundedLifecycles(t *testing.T) {
+	for _, name := range []string{"io_setup", "io_getevents", "io_pgetevents", "io_destroy", "io_submit", "io_cancel"} {
+		t.Run(name, func(t *testing.T) {
+			p := parseSingleProg(t, name+"() = 0")
+			want := "syz_csb_" + name + "()[0]"
+			if got := strings.TrimSpace(string(p.Serialize())); got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+			src, _, err := csource.Write(p, csource.Options{Slowdown: 1, CSB: true, Trace: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if helper := "UNIQUE_FUNC(syz_csb_" + name + ")()"; !strings.Contains(string(src), helper) {
+				t.Fatalf("generated CSB header missing %q", helper)
+			}
+		})
+	}
+}
+
+func TestRtSigactionIsolatesDispositionChange(t *testing.T) {
+	p := parseSingleProg(t, `rt_sigaction(SIGUSR2, {sa_handler=0x1234, sa_mask=[USR1 TERM], sa_flags=0x10000000}, NULL, 8) = 0`)
+	if got := strings.TrimSpace(string(p.Serialize())); got !=
+		"syz_csb_rt_sigaction(0xc, 0x10000000, 0x4200, 0x0, 0x0, 0x0)[0]" {
+		t.Fatalf("got %q", got)
+	}
+	src, _, err := csource.Write(p, csource.Options{Slowdown: 1, CSB: true, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "UNIQUE_FUNC(syz_csb_rt_sigaction)"; !strings.Contains(string(src), want) {
+		t.Fatalf("generated CSB header missing %q", want)
+	}
+	for _, want := range []string{"fork()", "sigaction(sig, &action, &old)", "action.sa_flags = flags"} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("generated helper missing %q", want)
+		}
+	}
+}
+
+func TestReservedRtSigactionIsDropped(t *testing.T) {
+	p := parseSingleProg(t, `rt_sigaction(SIGRTMIN, {sa_handler=0x1234}, NULL, 8) = 0`)
+	if len(p.Calls) != 0 {
+		t.Fatalf("generated %d calls for libc-reserved signal", len(p.Calls))
+	}
+}
+
+func TestFailedRtSigactionIsDropped(t *testing.T) {
+	p := parseSingleProg(t, `rt_sigaction(SIGUSR1, 0x1234, NULL, 8) = -1 EFAULT (Bad address)`)
+	if len(p.Calls) != 0 {
+		t.Fatalf("failed rt_sigaction must be dropped:\n%s", p.Serialize())
+	}
+}
+
+func TestRtSigactionQueryIsReplayedDirectly(t *testing.T) {
+	p := parseSingleProg(t, `rt_sigaction(10, NULL, {sa_handler=SIG_DFL}, 8) = 0`)
+	if got := strings.TrimSpace(string(p.Serialize())); !strings.HasPrefix(got, "rt_sigaction(") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSignalNumberUsesTargetABI(t *testing.T) {
+	ctx := &context{target: &prog.Target{Arch: "mips64le"}}
+	if got := ctx.signalNumber(&parser.BufferType{Val: "SIGUSR1"}); got != 16 {
+		t.Fatalf("MIPS SIGUSR1 = %d, want 16", got)
+	}
+	if got := ctx.signalNumber(&parser.BufferType{Val: "SIGRT_1"}); got != 33 {
+		t.Fatalf("SIGRT_1 = %d, want 33", got)
+	}
+	if got := ctx.signalNumber(&parser.BufferType{Val: "SIGRTMAX"}); got != 127 {
+		t.Fatalf("MIPS SIGRTMAX = %d, want 127", got)
+	}
+	if got := ctx.signalNumber(&parser.BufferType{Val: "SIGRT_95"}); got != 127 {
+		t.Fatalf("MIPS SIGRT_95 = %d, want 127", got)
+	}
+	if got := ctx.signalNumber(&parser.BufferType{Val: "SIGRT_96"}); got != 0 {
+		t.Fatalf("MIPS SIGRT_96 = %d, want 0", got)
+	}
+	mask := ctx.sigsetMask(&parser.GroupType{Elems: []parser.IrType{parser.Constant(65), parser.Constant(127)}})
+	if mask != [4]uint64{0, 0, 1, 1 << 30} {
+		t.Fatalf("MIPS high signal mask = %#v", mask)
+	}
+	complement := ctx.sigsetMask(&parser.GroupType{Complement: true})
+	if complement != [4]uint64{0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff} {
+		t.Fatalf("MIPS complemented mask = %#v", complement)
+	}
+}
+
 func TestShortSafeCallsAreDropped(t *testing.T) {
 	p := parseSingleProg(t, `
 madvise() = 0
@@ -742,7 +830,7 @@ func TestExecLifecycleCall(t *testing.T) {
 	}
 }
 
-func TestSkipOnlyRootBootstrapExec(t *testing.T) {
+func TestSkipOnlyInitialBootstrapExec(t *testing.T) {
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
 	if err != nil {
 		t.Fatal(err)
@@ -756,18 +844,27 @@ func TestSkipOnlyRootBootstrapExec(t *testing.T) {
 	}}
 
 	root := string(genProg(trace, target, false, false, false, true).Serialize())
-	if got := strings.Count(root, "syz_csb_execve"); got != 1 {
-		t.Fatalf("root contains %d exec lifecycles, want 1:\n%s", got, root)
+	if got := strings.Count(root, "syz_csb_execve"); got != 2 {
+		t.Fatalf("root contains %d exec lifecycles, want 2:\n%s", got, root)
 	}
 	if !strings.Contains(root, "getppid") {
-		t.Fatalf("root lost calls after its skipped bootstrap exec:\n%s", root)
+		t.Fatalf("root lost replacement-image workload:\n%s", root)
 	}
 	child := string(genProg(trace, target, false, false, false, false).Serialize())
-	if got := strings.Count(child, "syz_csb_execve"); got != 1 {
-		t.Fatalf("child contains %d exec lifecycles, want 1:\n%s", got, child)
+	if got := strings.Count(child, "syz_csb_execve"); got != 2 {
+		t.Fatalf("child contains %d exec lifecycles, want 2:\n%s", got, child)
 	}
-	if strings.Contains(child, "getppid") {
-		t.Fatalf("child retained calls after its successful workload exec:\n%s", child)
+	if !strings.Contains(child, "getppid") {
+		t.Fatalf("child lost replacement-image workload:\n%s", child)
+	}
+	initial := &parser.Trace{Calls: []*parser.Syscall{
+		parser.NewSyscall(1, "execve", nil, -1, false, false),
+		parser.NewSyscall(1, "execve", nil, 0, false, false),
+		parser.NewSyscall(1, "getpid", nil, 1, false, false),
+	}}
+	got := string(genProg(initial, target, false, false, false, true).Serialize())
+	if count := strings.Count(got, "syz_csb_execve"); count != 0 || !strings.Contains(got, "getpid") {
+		t.Fatalf("initial bootstrap handling failed:\n%s", got)
 	}
 }
 
@@ -784,15 +881,15 @@ func TestBootstrapExecIsRootSpecific(t *testing.T) {
 	}}
 
 	got := string(genProg(trace, target, false, false, false, true).Serialize())
-	if lifecycles := strings.Count(got, "syz_csb_execve"); lifecycles != 1 {
-		t.Fatalf("got %d exec lifecycles, want child exec only:\n%s", lifecycles, got)
+	if lifecycles := strings.Count(got, "syz_csb_execve"); lifecycles != 2 {
+		t.Fatalf("got %d exec lifecycles, want child and workload execs:\n%s", lifecycles, got)
 	}
 	if !strings.Contains(got, "getppid") {
-		t.Fatalf("root calls after its bootstrap exec were lost:\n%s", got)
+		t.Fatalf("root lost replacement-image workload:\n%s", got)
 	}
 }
 
-func TestSuccessfulExecTerminatesOnlyItsTID(t *testing.T) {
+func TestSuccessfulExecKeepsReplacementWorkload(t *testing.T) {
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
 	if err != nil {
 		t.Fatal(err)
@@ -812,12 +909,12 @@ func TestSuccessfulExecTerminatesOnlyItsTID(t *testing.T) {
 	if !strings.Contains(got, "getpid") {
 		t.Fatalf("calls from a live interleaved TID were lost:\n%s", got)
 	}
-	if strings.Contains(got, "getppid") || strings.Contains(got, "getuid") {
-		t.Fatalf("calls after successful exec remained in their TID:\n%s", got)
+	if !strings.Contains(got, "getppid") || !strings.Contains(got, "getuid") {
+		t.Fatalf("replacement-image workload was lost:\n%s", got)
 	}
 }
 
-func TestExitCallsAreSkipped(t *testing.T) {
+func TestExitCallsUseBoundedLifecycles(t *testing.T) {
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
 	if err != nil {
 		t.Fatal(err)
@@ -832,8 +929,20 @@ func TestExitCallsAreSkipped(t *testing.T) {
 	if !strings.Contains(got, "syz_csb_execve()") {
 		t.Fatalf("exec lifecycle was lost:\n%s", got)
 	}
-	if strings.Contains(got, "exit(") || strings.Contains(got, "exit_group(") {
-		t.Fatalf("process termination call remained:\n%s", got)
+	for _, want := range []string{"syz_csb_exit()[0]", "syz_csb_exit_group()[0]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bounded termination helper %q missing:\n%s", want, got)
+		}
+	}
+	src, _, err := csource.Write(genProg(trace, target, false, false, false, false),
+		csource.Options{Slowdown: 1, CSB: true, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"UNIQUE_FUNC(syz_csb_exit)", "UNIQUE_FUNC(syz_csb_exit_group)"} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("generated CSB header missing %q", want)
+		}
 	}
 }
 

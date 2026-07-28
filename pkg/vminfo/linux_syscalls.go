@@ -107,6 +107,21 @@ var linuxSyscallChecks = map[string]func(*checkContext, *prog.Syscall) string{
 	"syz_pidfd_open":                alwaysSupported,
 	"syz_create_resource":           alwaysSupported,
 	"syz_kfuzztest_run":             alwaysSupported,
+	"syz_csb_execve":                alwaysSupported,
+	"syz_csb_execveat":              alwaysSupported,
+	"syz_csb_fexecve":               alwaysSupported,
+	"syz_csb_thread_create_join":    alwaysSupported,
+	"syz_csb_fork_wait":             alwaysSupported,
+	"syz_csb_vfork_wait":            alwaysSupported,
+	"syz_csb_io_setup":              alwaysSupported,
+	"syz_csb_io_getevents":          alwaysSupported,
+	"syz_csb_io_pgetevents":         alwaysSupported,
+	"syz_csb_io_destroy":            alwaysSupported,
+	"syz_csb_io_submit":             alwaysSupported,
+	"syz_csb_io_cancel":             alwaysSupported,
+	"syz_csb_exit":                  alwaysSupported,
+	"syz_csb_exit_group":            alwaysSupported,
+	"syz_csb_rt_sigaction":          alwaysSupported,
 }
 
 func linuxSyzOpenDevSupported(ctx *checkContext, call *prog.Syscall) string {

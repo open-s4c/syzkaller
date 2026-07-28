@@ -97,7 +97,8 @@ func (s *Syscall) String() string {
 
 // GroupType contains arrays and structs
 type GroupType struct {
-	Elems []IrType
+	Elems      []IrType
+	Complement bool
 }
 
 func newGroupType(elems []IrType) (typ *GroupType) {

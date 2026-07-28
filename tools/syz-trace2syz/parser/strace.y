@@ -141,7 +141,7 @@ type:
     | field_type {$$ = $1}
     | group_type {$$ = $1}
     | constant %prec LOWEST {$$ = $1}
-    | ONESCOMP group_type {$$ = $2}
+    | ONESCOMP group_type {$2.Complement = true; $$ = $2}
 
 constant:
     INT {$$ = Constant($1)}

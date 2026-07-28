@@ -891,6 +891,7 @@ Stracedefault:
 		StraceDollar = StraceS[Stracept-2 : Stracept+1]
 //line tools/syz-trace2syz/parser/strace.y:144
 		{
+			StraceDollar[2].val_group_type.Complement = true
 			StraceVAL.val_type = StraceDollar[2].val_group_type
 		}
 	case 40:
