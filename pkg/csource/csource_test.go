@@ -488,6 +488,24 @@ func assertCSBExecIdentifiersNamespaced(t *testing.T, src []byte) {
 	}
 }
 
+func TestCSBHelpersNamespaced(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := target.Deserialize([]byte("syz_csb_io_setup()\nsyz_csb_exit()\nsyz_csb_thread_create_join()\nsyz_csb_rt_sigaction()\nsyz_csb_rt_sigreturn()\nsyz_csb_rt_sigqueueinfo()\nsyz_csb_rt_sigsuspend()\n"), prog.NonStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _, err := Write(p, Options{CSB: true, Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"syz_csb_io_setup", "syz_csb_exit", "syz_csb_thread_create_join", "syz_csb_rt_sigaction", "syz_csb_rt_sigreturn", "syz_csb_rt_sigqueueinfo", "syz_csb_rt_sigsuspend"} {
+		assert.GreaterOrEqual(t, strings.Count(string(src), "UNIQUE_FUNC("+name+")"), 2)
+	}
+}
+
 func testPseudoSyscalls(t *testing.T, target *prog.Target, ct *prog.ChoiceTable) {
 	// Use options that are as minimal as possible.
 	// We want to ensure that the code can always be compiled.

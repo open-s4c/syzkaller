@@ -8,6 +8,303 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#if SYZ_EXECUTOR || __NR_syz_csb_io_setup || __NR_syz_csb_io_getevents || __NR_syz_csb_io_pgetevents || __NR_syz_csb_io_destroy || __NR_syz_csb_io_submit || __NR_syz_csb_io_cancel
+#include <fcntl.h>
+#include <linux/aio_abi.h>
+#include <string.h>
+
+enum UNIQUE_FUNC(csb_aio_op) {
+	UNIQUE_FUNC(CSB_AIO_SETUP),
+	UNIQUE_FUNC(CSB_AIO_GETEVENTS),
+	UNIQUE_FUNC(CSB_AIO_PGETEVENTS),
+	UNIQUE_FUNC(CSB_AIO_DESTROY),
+	UNIQUE_FUNC(CSB_AIO_SUBMIT),
+	UNIQUE_FUNC(CSB_AIO_CANCEL),
+};
+
+// csb_aio_lifecycle owns every pointer and resource used by the replay so a
+// trace from another process cannot block or leak an AIO context.
+static long UNIQUE_FUNC(csb_aio_lifecycle)(enum UNIQUE_FUNC(csb_aio_op) op)
+{
+	aio_context_t ctx = 0;
+	if (syscall(__NR_io_setup, 1, &ctx) < 0)
+		return -1;
+	long ret = 0;
+	struct io_event event;
+	struct timespec timeout = {};
+	if (op == UNIQUE_FUNC(CSB_AIO_GETEVENTS))
+		ret = syscall(__NR_io_getevents, ctx, 0, 1, &event, &timeout);
+#if defined(__NR_io_pgetevents) || __NR_syz_csb_io_pgetevents
+	else if (op == UNIQUE_FUNC(CSB_AIO_PGETEVENTS))
+		ret = syscall(__NR_io_pgetevents, ctx, 0, 1, &event, &timeout, 0);
+#endif
+
+	else if (op == UNIQUE_FUNC(CSB_AIO_SUBMIT) || op == UNIQUE_FUNC(CSB_AIO_CANCEL)) {
+		char byte = 0;
+		struct iocb cb;
+		memset(&cb, 0, sizeof(cb));
+		cb.aio_lio_opcode = IOCB_CMD_PWRITE;
+		cb.aio_fildes = open("/dev/null", O_WRONLY);
+		cb.aio_buf = (uint64)&byte;
+		cb.aio_nbytes = 1;
+		struct iocb* list[] = {&cb};
+		ret = syscall(__NR_io_submit, ctx, 1, list);
+		if (op == UNIQUE_FUNC(CSB_AIO_CANCEL))
+			ret = syscall(__NR_io_cancel, ctx, &cb, &event);
+		else if (ret == 1)
+			ret = syscall(__NR_io_getevents, ctx, 0, 1, &event, &timeout);
+		if (cb.aio_fildes >= 0)
+			close(cb.aio_fildes);
+	}
+	long destroyed = syscall(__NR_io_destroy, ctx);
+	return ret < 0 ? ret : destroyed;
+}
+
+static long UNIQUE_FUNC(syz_csb_io_setup)(void) { return UNIQUE_FUNC(csb_aio_lifecycle)(UNIQUE_FUNC(CSB_AIO_SETUP)); }
+static long UNIQUE_FUNC(syz_csb_io_getevents)(void) { return UNIQUE_FUNC(csb_aio_lifecycle)(UNIQUE_FUNC(CSB_AIO_GETEVENTS)); }
+static long UNIQUE_FUNC(syz_csb_io_pgetevents)(void) { return UNIQUE_FUNC(csb_aio_lifecycle)(UNIQUE_FUNC(CSB_AIO_PGETEVENTS)); }
+static long UNIQUE_FUNC(syz_csb_io_destroy)(void) { return UNIQUE_FUNC(csb_aio_lifecycle)(UNIQUE_FUNC(CSB_AIO_DESTROY)); }
+static long UNIQUE_FUNC(syz_csb_io_submit)(void) { return UNIQUE_FUNC(csb_aio_lifecycle)(UNIQUE_FUNC(CSB_AIO_SUBMIT)); }
+static long UNIQUE_FUNC(syz_csb_io_cancel)(void) { return UNIQUE_FUNC(csb_aio_lifecycle)(UNIQUE_FUNC(CSB_AIO_CANCEL)); }
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_csb_exit || __NR_syz_csb_exit_group
+#include <errno.h>
+#include <sys/wait.h>
+
+// Run termination in a child and reap it so a CSB operation can repeat safely.
+static long UNIQUE_FUNC(csb_exit_lifecycle)(int group)
+{
+#if defined(__NR_fork)
+	long pid = syscall(__NR_fork);
+#else
+	long pid = syscall(__NR_clone, SIGCHLD, 0, 0, 0, 0);
+#endif
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		syscall(group ? __NR_exit_group : __NR_exit, 0);
+		_exit(0);
+	}
+	int status = 0;
+	long ret;
+	do {
+		ret = syscall(__NR_wait4, pid, &status, 0, 0);
+	} while (ret < 0 && errno == EINTR);
+	return ret == pid ? 0 : -1;
+}
+
+static long UNIQUE_FUNC(syz_csb_exit)(void) { return UNIQUE_FUNC(csb_exit_lifecycle)(0); }
+static long UNIQUE_FUNC(syz_csb_exit_group)(void) { return UNIQUE_FUNC(csb_exit_lifecycle)(1); }
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_csb_rt_sigaction || __NR_syz_csb_rt_sigreturn || __NR_syz_csb_rt_sigqueueinfo || __NR_syz_csb_rt_sigsuspend
+#include <errno.h>
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
+#include <string.h>
+#include <sys/wait.h>
+
+#if CSB
+/*#ifndef*/ CSB_SIGNAL_LOCK_DEFINED
+#define CSB_SIGNAL_LOCK_DEFINED
+static pthread_mutex_t csb_signal_lock = PTHREAD_MUTEX_INITIALIZER;
+/*#endif*/
+#define CSB_SIGNAL_LOCK csb_signal_lock
+#else
+static pthread_mutex_t UNIQUE_VAR(csb_signal_lock) = PTHREAD_MUTEX_INITIALIZER;
+#define CSB_SIGNAL_LOCK UNIQUE_VAR(csb_signal_lock)
+#endif
+
+static long UNIQUE_FUNC(csb_lock_signal)(void)
+{
+	int err = pthread_mutex_lock(&CSB_SIGNAL_LOCK);
+	if (!err)
+		return 0;
+	errno = err;
+	return -1;
+}
+
+#if SYZ_EXECUTOR || __NR_syz_csb_rt_sigaction || __NR_syz_csb_rt_sigreturn || __NR_syz_csb_rt_sigsuspend
+static void UNIQUE_FUNC(csb_noop_signal_handler)(int sig)
+{
+	(void)sig;
+}
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_csb_rt_sigqueueinfo
+static volatile sig_atomic_t UNIQUE_VAR(csb_signal_seen);
+
+static void UNIQUE_FUNC(csb_seen_signal_handler)(int sig)
+{
+	(void)sig;
+	UNIQUE_VAR(csb_signal_seen) = 1;
+}
+#endif
+
+// Use a generated handler because executable addresses in strace are not portable.
+#if SYZ_EXECUTOR || __NR_syz_csb_rt_sigaction
+static long UNIQUE_FUNC(syz_csb_rt_sigaction)(void)
+{
+	struct sigaction action;
+	struct sigaction old;
+	if (UNIQUE_FUNC(csb_lock_signal)() < 0)
+		return -1;
+	memset(&action, 0, sizeof(action));
+	action.sa_handler = UNIQUE_FUNC(csb_noop_signal_handler);
+	sigemptyset(&action.sa_mask);
+	long ret = sigaction(SIGUSR1, &action, &old);
+	if (ret == 0)
+		ret = sigaction(SIGUSR1, &old, 0);
+	pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+	return ret;
+}
+#endif
+
+// Returning from a delivered signal asks the kernel to perform rt_sigreturn
+// with a valid, architecture-specific frame instead of a traced stack pointer.
+#if SYZ_EXECUTOR || __NR_syz_csb_rt_sigreturn
+static long UNIQUE_FUNC(syz_csb_rt_sigreturn)(void)
+{
+	struct sigaction action;
+	struct sigaction old;
+	sigset_t helper_mask;
+	sigset_t old_mask;
+	if (UNIQUE_FUNC(csb_lock_signal)() < 0)
+		return -1;
+	memset(&action, 0, sizeof(action));
+	action.sa_handler = UNIQUE_FUNC(csb_noop_signal_handler);
+	sigemptyset(&action.sa_mask);
+	if (sigaction(SIGUSR1, &action, &old) < 0) {
+		pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+		return -1;
+	}
+	sigemptyset(&helper_mask);
+	sigaddset(&helper_mask, SIGUSR1);
+	if (sigprocmask(SIG_UNBLOCK, &helper_mask, &old_mask) < 0) {
+		sigaction(SIGUSR1, &old, 0);
+		pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+		return -1;
+	}
+	long ret = raise(SIGUSR1);
+	if (sigprocmask(SIG_SETMASK, &old_mask, 0) < 0)
+		ret = -1;
+	if (sigaction(SIGUSR1, &old, 0) < 0)
+		ret = -1;
+	pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+	return ret;
+}
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_csb_rt_sigqueueinfo || __NR_syz_csb_rt_sigsuspend
+static long UNIQUE_FUNC(csb_queue_owned_signal)(long tid)
+{
+	siginfo_t info;
+	memset(&info, 0, sizeof(info));
+	info.si_signo = SIGUSR1;
+	info.si_code = SI_QUEUE;
+	info.si_pid = getpid();
+	info.si_uid = getuid();
+	if (tid)
+		return syscall(__NR_rt_tgsigqueueinfo, getpid(), tid, SIGUSR1, &info);
+	return syscall(__NR_rt_sigqueueinfo, getpid(), SIGUSR1, &info);
+}
+#endif
+
+// Queue only to this process after installing a generated handler.
+#if SYZ_EXECUTOR || __NR_syz_csb_rt_sigqueueinfo
+static long UNIQUE_FUNC(csb_rt_sigqueueinfo_lifecycle)(void)
+{
+	struct sigaction action;
+	struct sigaction old;
+	sigset_t helper_mask;
+	sigset_t old_mask;
+	memset(&action, 0, sizeof(action));
+	action.sa_handler = UNIQUE_FUNC(csb_seen_signal_handler);
+	sigemptyset(&action.sa_mask);
+	if (sigaction(SIGUSR1, &action, &old) < 0)
+		return -1;
+	sigemptyset(&helper_mask);
+	sigaddset(&helper_mask, SIGUSR1);
+	if (sigprocmask(SIG_UNBLOCK, &helper_mask, &old_mask) < 0) {
+		sigaction(SIGUSR1, &old, 0);
+		return -1;
+	}
+	UNIQUE_VAR(csb_signal_seen) = 0;
+	long ret = UNIQUE_FUNC(csb_queue_owned_signal)(0);
+	while (ret >= 0 && !UNIQUE_VAR(csb_signal_seen))
+		sched_yield();
+	if (sigprocmask(SIG_SETMASK, &old_mask, 0) < 0)
+		ret = -1;
+	if (sigaction(SIGUSR1, &old, 0) < 0)
+		ret = -1;
+	return ret;
+}
+
+static long UNIQUE_FUNC(syz_csb_rt_sigqueueinfo)(void)
+{
+	if (UNIQUE_FUNC(csb_lock_signal)() < 0)
+		return -1;
+	long pid = fork();
+	if (pid == 0)
+		_exit(UNIQUE_FUNC(csb_rt_sigqueueinfo_lifecycle)() == 0 ? 0 : 1);
+	if (pid < 0) {
+		pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+		return -1;
+	}
+	int status = 0;
+	long ret;
+	do {
+		ret = waitpid(pid, &status, 0);
+	} while (ret < 0 && errno == EINTR);
+	pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+	return ret == pid && status == 0 ? 0 : -1;
+}
+#endif
+
+// Queue SIGUSR1 before suspending so replay cannot wait indefinitely.
+#if SYZ_EXECUTOR || __NR_syz_csb_rt_sigsuspend
+static long UNIQUE_FUNC(syz_csb_rt_sigsuspend)(void)
+{
+	struct sigaction action;
+	struct sigaction old_action;
+	sigset_t blocked;
+	sigset_t old_mask;
+	if (UNIQUE_FUNC(csb_lock_signal)() < 0)
+		return -1;
+	memset(&action, 0, sizeof(action));
+	action.sa_handler = UNIQUE_FUNC(csb_noop_signal_handler);
+	sigemptyset(&action.sa_mask);
+	if (sigaction(SIGUSR1, &action, &old_action) < 0) {
+		pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+		return -1;
+	}
+	sigemptyset(&blocked);
+	sigaddset(&blocked, SIGUSR1);
+	if (sigprocmask(SIG_BLOCK, &blocked, &old_mask) < 0) {
+		sigaction(SIGUSR1, &old_action, 0);
+		pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+		return -1;
+	}
+	long ret = UNIQUE_FUNC(csb_queue_owned_signal)(syscall(__NR_gettid));
+	if (ret >= 0) {
+		sigset_t suspend_mask = old_mask;
+		sigdelset(&suspend_mask, SIGUSR1);
+		long sigset_size = 8;
+#if GOARCH_mips64le
+		sigset_size = 16;
+#endif
+		ret = syscall(__NR_rt_sigsuspend, &suspend_mask, sigset_size);
+	}
+	sigprocmask(SIG_SETMASK, &old_mask, 0);
+	sigaction(SIGUSR1, &old_action, 0);
+	pthread_mutex_unlock(&CSB_SIGNAL_LOCK);
+	return ret;
+}
+#endif
+#endif
+
 #if SYZ_EXECUTOR || __NR_syz_csb_execve || __NR_syz_csb_execveat || __NR_syz_csb_fexecve
 #include <errno.h>
 #include <fcntl.h>
@@ -5951,15 +6248,15 @@ static long syz_clone3(volatile long a0, volatile long a1)
 #include <pthread.h>
 
 // Exercise task creation and teardown without replaying the traced child workload.
-static void* csb_thread_exit(void* arg)
+static void* UNIQUE_FUNC(csb_thread_exit)(void* arg)
 {
 	return arg;
 }
 
-static long syz_csb_thread_create_join(void)
+static long UNIQUE_FUNC(syz_csb_thread_create_join)(void)
 {
 	pthread_t thread;
-	int ret = pthread_create(&thread, 0, csb_thread_exit, 0);
+	int ret = pthread_create(&thread, 0, UNIQUE_FUNC(csb_thread_exit), 0);
 	if (ret != 0) {
 		errno = ret;
 		return -1;
@@ -5974,7 +6271,7 @@ static long syz_csb_thread_create_join(void)
 #endif
 
 #if SYZ_EXECUTOR || __NR_syz_csb_fork_wait || __NR_syz_csb_vfork_wait
-static long csb_wait_child(pid_t pid)
+static long UNIQUE_FUNC(csb_wait_child)(pid_t pid)
 {
 	int status = 0;
 	long ret = 0;
@@ -5987,7 +6284,7 @@ static long csb_wait_child(pid_t pid)
 
 #if SYZ_EXECUTOR || __NR_syz_csb_fork_wait
 #include <signal.h>
-static long syz_csb_fork_wait(void)
+static long UNIQUE_FUNC(syz_csb_fork_wait)(void)
 {
 #if defined(__NR_fork)
 	long pid = syscall(__NR_fork);
@@ -5999,18 +6296,18 @@ static long syz_csb_fork_wait(void)
 		for (;;) {
 		}
 	}
-	return pid < 0 ? -1 : csb_wait_child(pid);
+	return pid < 0 ? -1 : UNIQUE_FUNC(csb_wait_child)(pid);
 }
 #endif
 
 #if SYZ_EXECUTOR || __NR_syz_csb_vfork_wait
-static long syz_csb_vfork_wait(void)
+static long UNIQUE_FUNC(syz_csb_vfork_wait)(void)
 {
 	long pid = vfork();
 	if (pid == 0) {
 		_exit(0);
 	}
-	return pid < 0 ? -1 : csb_wait_child(pid);
+	return pid < 0 ? -1 : UNIQUE_FUNC(csb_wait_child)(pid);
 }
 #endif
 
