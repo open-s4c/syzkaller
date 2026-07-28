@@ -118,6 +118,15 @@ func runTrace2SyzForArch(t *testing.T, tracePath, arch string) map[string][]byte
 	return readOutputFiles(t, outDir)
 }
 
+func TestValidateTargetOS(t *testing.T) {
+	if err := validateTargetOS("linux"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTargetOS("freebsd"); err == nil {
+		t.Fatal("non-Linux target accepted")
+	}
+}
+
 func readOutputFiles(t *testing.T, dir string) map[string][]byte {
 	t.Helper()
 	ret := make(map[string][]byte)

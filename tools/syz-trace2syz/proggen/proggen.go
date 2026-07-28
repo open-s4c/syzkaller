@@ -160,10 +160,6 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength, randomized, ma
 	numCalls := len(trace.Calls)
 	// Skip only the root bootstrap; a later successful exec ends that TID's original workload.
 	bootstrapExecSkipped := false
-	var rootPID int64
-	if len(trace.Calls) != 0 {
-		rootPID = trace.Calls[0].Pid
-	}
 	terminatedTIDs := make(map[int64]bool)
 	for sIdx, sCall := range trace.Calls {
 		if sIdx%1000 == 0 {
@@ -180,7 +176,7 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength, randomized, ma
 		if terminatedTIDs[sCall.Pid] {
 			continue
 		}
-		if skipBootstrapExec && !bootstrapExecSkipped && sCall.Pid == rootPID && isSuccessfulExec(sCall) {
+		if skipBootstrapExec && !bootstrapExecSkipped && sCall.Pid == trace.RootPid && isSuccessfulExec(sCall) {
 			bootstrapExecSkipped = true
 			continue
 		}
@@ -258,6 +254,20 @@ func (ctx *context) genCalls() []*prog.Call {
 		return singleCall(ctx.genTaskLifecycleCall("syz_csb_fork_wait"))
 	case "vfork":
 		return singleCall(ctx.genTaskLifecycleCall("syz_csb_vfork_wait"))
+	case "io_setup", "io_getevents", "io_pgetevents", "io_destroy", "io_submit", "io_cancel":
+		if ctx.currentStraceCall.Ret < 0 {
+			return nil
+		}
+		// Trace AIO contexts and iocb pointers are process-local. Exercise the
+		// requested syscall through a helper that owns a complete, bounded AIO lifecycle.
+		call := ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName)
+		call.StraceRetVal = 0
+		return singleCall(call)
+	case "exit", "exit_group":
+		// Terminate a disposable child so the repeated CSB worker remains alive.
+		call := ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName)
+		call.StraceRetVal = 0
+		return singleCall(call)
 	default:
 		return singleCall(ctx.genCall())
 	}

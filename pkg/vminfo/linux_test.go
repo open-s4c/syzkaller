@@ -89,6 +89,19 @@ func TestLinuxSyscalls(t *testing.T) {
 	}
 }
 
+func TestCSBTaskSyscallChecks(t *testing.T) {
+	target := targets.Get(targets.Linux, targets.AMD64)
+	for _, name := range []string{"syz_csb_thread_create_join", "syz_csb_fork_wait", "syz_csb_vfork_wait"} {
+		if len(target.PseudoSyscallDeps[name]) == 0 {
+			t.Errorf("%s is not registered", name)
+		}
+	}
+	check := linuxSyscallChecks["syz_reapply_affinity"]
+	if check == nil || check(nil, nil) != "" {
+		t.Error("syz_reapply_affinity is not always supported")
+	}
+}
+
 func TestReadKVMInfo(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("not linux")

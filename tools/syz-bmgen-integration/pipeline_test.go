@@ -324,6 +324,9 @@ func tool(name string) string {
 
 func requireTools(t *testing.T) {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("integration test")
+	}
 	for _, name := range []string{"syz-trace2syz", "syz-extraction", "syz-prog-reduce", "syz-prog2c"} {
 		if _, err := os.Stat(tool(name)); err != nil {
 			t.Fatalf("%s is required; run make trace2syz extraction progreduce prog2c: %v", tool(name), err)

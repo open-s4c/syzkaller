@@ -42,10 +42,14 @@ func (tree *TraceTree) add(call *Syscall) {
 
 // Trace is just a list of system calls
 type Trace struct {
-	Calls []*Syscall
+	Calls   []*Syscall
+	RootPid int64
 }
 
 func (trace *Trace) add(call *Syscall) *Syscall {
+	if trace.RootPid == 0 {
+		trace.RootPid = call.Pid
+	}
 	if !call.Resumed {
 		trace.Calls = append(trace.Calls, call)
 		return call

@@ -643,8 +643,9 @@ func TestTaskCreationLifecycleFromTrace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(src), test.want) {
-				t.Fatalf("generated CSB header missing %q:\n%s", test.want, src)
+			helper := "UNIQUE_FUNC(" + strings.TrimSuffix(test.want, "()") + ")()"
+			if !strings.Contains(string(src), helper) {
+				t.Fatalf("generated CSB header missing %q:\n%s", helper, src)
 			}
 		})
 	}
@@ -707,6 +708,42 @@ func TestTaskCreationLifecycleCompiles(t *testing.T) {
 	}
 }
 
+func TestAIOCallsUseBoundedLifecycles(t *testing.T) {
+	for _, name := range []string{"io_setup", "io_getevents", "io_pgetevents", "io_destroy", "io_submit", "io_cancel"} {
+		t.Run(name, func(t *testing.T) {
+			p := parseSingleProg(t, name+"() = 0")
+			want := "syz_csb_" + name + "()[0]"
+			if got := strings.TrimSpace(string(p.Serialize())); got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+			src, _, err := csource.Write(p, csource.Options{Slowdown: 1, CSB: true, Trace: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if helper := "UNIQUE_FUNC(syz_csb_" + name + ")"; !strings.Contains(string(src), helper) {
+				t.Fatalf("generated CSB header missing %q", helper)
+			}
+			if name == "io_pgetevents" && !strings.Contains(string(src), "syscall(__NR_io_pgetevents") {
+				t.Fatal("generated helper omits io_pgetevents")
+			}
+		})
+	}
+}
+
+func TestFailedAIOCallsAreDropped(t *testing.T) {
+	p := parseSingleProg(t, `io_setup() = -1`)
+	if len(p.Calls) != 0 {
+		t.Fatalf("failed AIO call must be dropped:\n%s", p.Serialize())
+	}
+}
+
+func TestAIOPositiveResultIsNormalized(t *testing.T) {
+	p := parseSingleProg(t, `io_submit() = 1`)
+	if got, want := strings.TrimSpace(string(p.Serialize())), "syz_csb_io_submit()[0]"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestShortSafeCallsAreDropped(t *testing.T) {
 	p := parseSingleProg(t, `
 madvise() = 0
@@ -747,7 +784,7 @@ func TestSkipOnlyRootBootstrapExec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	trace := &parser.Trace{Calls: []*parser.Syscall{
+	trace := &parser.Trace{RootPid: 1, Calls: []*parser.Syscall{
 		parser.NewSyscall(1, "execve", nil, -1, false, false),
 		parser.NewSyscall(1, "getpid", nil, 1, false, false),
 		parser.NewSyscall(1, "execveat", nil, 0, false, false),
@@ -771,24 +808,22 @@ func TestSkipOnlyRootBootstrapExec(t *testing.T) {
 	}
 }
 
-func TestBootstrapExecIsRootSpecific(t *testing.T) {
+func TestBootstrapExecUsesRootTID(t *testing.T) {
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	trace := &parser.Trace{Calls: []*parser.Syscall{
-		parser.NewSyscall(1, "getpid", nil, 1, false, false),
+	trace := &parser.Trace{RootPid: 1, Calls: []*parser.Syscall{
 		parser.NewSyscall(2, "execve", nil, 0, false, false),
+		parser.NewSyscall(2, "getuid", nil, 0, false, false),
 		parser.NewSyscall(1, "execve", nil, 0, false, false),
-		parser.NewSyscall(1, "getppid", nil, 1, false, false),
+		parser.NewSyscall(1, "getpid", nil, 1, false, false),
 	}}
 
 	got := string(genProg(trace, target, false, false, false, true).Serialize())
-	if lifecycles := strings.Count(got, "syz_csb_execve"); lifecycles != 1 {
-		t.Fatalf("got %d exec lifecycles, want child exec only:\n%s", lifecycles, got)
-	}
-	if !strings.Contains(got, "getppid") {
-		t.Fatalf("root calls after its bootstrap exec were lost:\n%s", got)
+	if strings.Count(got, "syz_csb_execve") != 1 || strings.Contains(got, "getuid") ||
+		!strings.Contains(got, "getpid") {
+		t.Fatalf("bootstrap exec was not restricted to the root TID:\n%s", got)
 	}
 }
 
@@ -817,24 +852,50 @@ func TestSuccessfulExecTerminatesOnlyItsTID(t *testing.T) {
 	}
 }
 
-func TestExitCallsAreSkipped(t *testing.T) {
+func TestExitCallsUseBoundedLifecycles(t *testing.T) {
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
 	trace := &parser.Trace{Calls: []*parser.Syscall{
 		parser.NewSyscall(1, "execve", nil, 0, false, false),
-		parser.NewSyscall(2, "exit", []parser.IrType{parser.Constant(0)}, 0, false, false),
-		parser.NewSyscall(3, "exit_group", []parser.IrType{parser.Constant(0)}, 0, false, false),
+		parser.NewSyscall(2, "exit", []parser.IrType{parser.Constant(0)}, -1, false, false),
+		parser.NewSyscall(3, "exit_group", []parser.IrType{parser.Constant(0)}, -1, false, false),
 	}}
 
 	got := string(genProg(trace, target, false, false, false, false).Serialize())
 	if !strings.Contains(got, "syz_csb_execve()") {
 		t.Fatalf("exec lifecycle was lost:\n%s", got)
 	}
-	if strings.Contains(got, "exit(") || strings.Contains(got, "exit_group(") {
-		t.Fatalf("process termination call remained:\n%s", got)
+	for _, want := range []string{"syz_csb_exit()[0]", "syz_csb_exit_group()[0]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bounded termination helper %q missing:\n%s", want, got)
+		}
 	}
+	src, _, err := csource.Write(genProg(trace, target, false, false, false, false),
+		csource.Options{Slowdown: 1, CSB: true, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "doexit_thread") {
+		t.Fatal("generated exit helper references executor-only code")
+	}
+	for _, want := range []string{"UNIQUE_FUNC(syz_csb_exit)", "UNIQUE_FUNC(syz_csb_exit_group)"} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("generated CSB header missing %q", want)
+		}
+	}
+	exitTrace := &parser.Trace{Calls: trace.Calls[1:]}
+	standalone, _, err := csource.Write(genProg(exitTrace, target, false, false, false, false),
+		csource.Options{Slowdown: 1, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, err := csource.Build(target, standalone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(bin)
 }
 
 func parseSingleProg(t *testing.T, input string) *prog.Prog {

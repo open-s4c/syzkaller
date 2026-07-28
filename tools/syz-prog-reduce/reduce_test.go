@@ -60,8 +60,8 @@ func TestReduceProgKeepsOnlyDependencyValidCalls(t *testing.T) {
 		KeepLast:          1,
 		IncludeConsts:     true,
 	})
-	if len(reduced.Calls) != 2 {
-		t.Fatalf("got %d calls, want one sampled producer/use pair:\n%s", len(reduced.Calls), reduced.Serialize())
+	if len(reduced.Calls) != 3 {
+		t.Fatalf("got %d calls, want all resource-dependent calls:\n%s", len(reduced.Calls), reduced.Serialize())
 	}
 	if _, err := reduced.SerializeForExec(); err != nil {
 		t.Fatalf("reduced program is not executable: %v\n%s", err, reduced.Serialize())
@@ -154,6 +154,31 @@ func TestReduceProgKeepsArgumentDistinctCallsStructural(t *testing.T) {
 	}
 }
 
+func TestReduceProgKeepsResourceInvocationsStructural(t *testing.T) {
+	p := testProg(t, ""+
+		"r0 = test$res2()\n"+
+		"fallback$1(r0)\n"+
+		"r1 = test$res2()\n"+
+		"fallback$1(r1)\n")
+	reduced, stats := reduceProg(p, reduceOptions{MaxMotifInstances: 1, IncludeConsts: true})
+	if len(reduced.Calls) != len(p.Calls) || stats.WeightedCalls != len(p.Calls) {
+		t.Fatalf("resource invocations were collapsed:\n%s", reduced.Serialize())
+	}
+	for _, call := range reduced.Calls {
+		if call.Props.Rerun != 0 {
+			t.Fatalf("resource call was rerun:\n%s", reduced.Serialize())
+		}
+	}
+}
+
+func TestReduceProgKeepsUnusedResourceProducers(t *testing.T) {
+	p := testProg(t, "r0 = test$res2()\nr1 = test$res2()\n")
+	reduced, stats := reduceProg(p, reduceOptions{MaxMotifInstances: 1, IncludeConsts: true})
+	if len(reduced.Calls) != 2 || stats.WeightedCalls != 2 {
+		t.Fatalf("resource producers were collapsed:\n%s", reduced.Serialize())
+	}
+}
+
 func TestReduceProgDoesNotCombineFailNthAndRerun(t *testing.T) {
 	p := testProg(t, ""+
 		"test() (fail_nth: 1)\n"+
@@ -239,11 +264,11 @@ func TestReduceProgHonorsLiveResourceCap(t *testing.T) {
 		MaxLiveResources:  1,
 		IncludeConsts:     true,
 	})
-	if len(reduced.Calls) != 2 {
-		t.Fatalf("got %d calls, want first producer and its use:\n%s", len(reduced.Calls), reduced.Serialize())
+	if len(reduced.Calls) != 3 {
+		t.Fatalf("got %d calls, want all resource-dependent calls:\n%s", len(reduced.Calls), reduced.Serialize())
 	}
-	if stats.DroppedResources == 0 {
-		t.Fatalf("expected resource-cap drops, got stats %+v", stats)
+	if stats.DroppedResources != 0 {
+		t.Fatalf("resource calls must override the soft cap, got stats %+v", stats)
 	}
 	if _, err := reduced.SerializeForExec(); err != nil {
 		t.Fatalf("reduced program is not executable: %v\n%s", err, reduced.Serialize())

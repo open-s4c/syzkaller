@@ -48,12 +48,22 @@ var (
 
 func main() {
 	flag.Parse()
+	if err := validateTargetOS(*flagOS); err != nil {
+		log.Fatalf("%v", err)
+	}
 	target := initializeTarget(*flagOS, *flagArch)
 	progs := parseTraces(target)
 	if !*flagSkipCorpus {
 		log.Logf(0, "successfully converted traces; generating corpus.db")
 		pack(progs)
 	}
+}
+
+func validateTargetOS(os string) error {
+	if os != targets.Linux {
+		return fmt.Errorf("unsupported target OS %q: CSB lifecycle helpers require Linux", os)
+	}
+	return nil
 }
 
 func initializeTarget(os, arch string) *prog.Target {

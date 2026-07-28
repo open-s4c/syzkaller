@@ -259,6 +259,17 @@ func TestSkippedOnlyRootRecordFallsBack(t *testing.T) {
 	}
 }
 
+func TestUnsplitRootPid(t *testing.T) {
+	data := []byte("7 read(3,  <unfinished ...>\n8 getpid() = 8\n7 <... read resumed>\"x\", 1) = 1\n")
+	_, trace, err := ParseData(data, false, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trace.RootPid != 7 {
+		t.Fatalf("root PID = %d, want 7", trace.RootPid)
+	}
+}
+
 func TestParseLoop1Child(t *testing.T) {
 	data1Child := `1 open() = 3
 				   1 clone() = 2
