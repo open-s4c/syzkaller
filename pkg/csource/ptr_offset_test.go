@@ -70,7 +70,7 @@ func TestDataMmapProgOffsetsGuards(t *testing.T) {
 	ctx := &context{p: p, target: target, sysTarget: targets.Get(target.OS, target.Arch), opts: Options{CSB: true}}
 	var calls strings.Builder
 	for _, call := range decoded.Calls {
-		calls.WriteString(ctx.fmtCallBody(call, false, true))
+		calls.WriteString(ctx.fmtCallBody(call, false, true, 0))
 	}
 	if got := strings.Count(calls.String(), "+PTR_OFFSET"); got != 3 {
 		t.Fatalf("data mmap and guards are not all relocated: %d offsets", got)
@@ -122,7 +122,7 @@ func TestPtrOffsetUsesPointerEncoding(t *testing.T) {
 
 	meta := target.SyscallMap["close"]
 	for _, arg := range []prog.ExecArgConst{{Size: 8, Value: addr}, {IsPointer: true, Size: 8, Value: addr}} {
-		got := ctx.fmtCallBody(prog.ExecCall{Meta: meta, Args: []prog.ExecArg{arg}}, false, false)
+		got := ctx.fmtCallBody(prog.ExecCall{Meta: meta, Args: []prog.ExecArg{arg}}, false, false, 0)
 		if strings.Contains(got, "+PTR_OFFSET") != arg.IsPointer {
 			t.Fatalf("direct argument relocation does not match pointer encoding: %s", got)
 		}
