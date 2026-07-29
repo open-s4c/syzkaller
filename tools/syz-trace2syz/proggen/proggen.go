@@ -252,6 +252,19 @@ func (ctx *context) genCalls() []*prog.Call {
 		return singleCall(ctx.genTaskLifecycleCall("syz_csb_fork_wait"))
 	case "vfork":
 		return singleCall(ctx.genTaskLifecycleCall("syz_csb_vfork_wait"))
+	case "io_setup", "io_getevents", "io_pgetevents", "io_destroy", "io_submit", "io_cancel":
+		// Trace AIO contexts and iocb pointers are process-local. Exercise the
+		// requested syscall through a helper that owns a complete, bounded AIO lifecycle.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName))
+	case "exit", "exit_group":
+		// Terminate a disposable child so the repeated CSB worker remains alive.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName))
+	case "rt_sigaction":
+		// Handler addresses are not portable; install and restore a generated no-op handler.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_rt_sigaction"))
+	case "rt_sigreturn":
+		// A real delivered signal lets the kernel construct the architecture-specific frame.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_rt_sigreturn"))
 	default:
 		return singleCall(ctx.genCall())
 	}

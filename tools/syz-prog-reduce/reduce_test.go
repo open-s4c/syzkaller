@@ -47,12 +47,12 @@ func TestReduceProgSamplesDynamicMotifs(t *testing.T) {
 	}
 }
 
-func TestReduceProgKeepsOnlyDependencyValidCalls(t *testing.T) {
+func TestReduceProgKeepsResourceCallsStructural(t *testing.T) {
 	p := testProg(t, ""+
 		"r0 = test$res2()\n"+
 		"fallback$1(r0)\n"+
 		"fallback$1(r0)\n")
-	reduced, _ := reduceProg(p, reduceOptions{
+	reduced, stats := reduceProg(p, reduceOptions{
 		MaxCalls:          0,
 		MaxMotifInstances: 1,
 		MaxLiveResources:  0,
@@ -60,8 +60,16 @@ func TestReduceProgKeepsOnlyDependencyValidCalls(t *testing.T) {
 		KeepLast:          1,
 		IncludeConsts:     true,
 	})
-	if len(reduced.Calls) != 2 {
-		t.Fatalf("got %d calls, want one sampled producer/use pair:\n%s", len(reduced.Calls), reduced.Serialize())
+	if len(reduced.Calls) != len(p.Calls) {
+		t.Fatalf("got %d calls, want all resource calls:\n%s", len(reduced.Calls), reduced.Serialize())
+	}
+	for _, call := range reduced.Calls {
+		if call.Props.Rerun != 0 {
+			t.Fatalf("resource call was collapsed into rerun:\n%s", reduced.Serialize())
+		}
+	}
+	if stats.WeightedCalls != len(p.Calls) {
+		t.Fatalf("weighted calls = %d, want %d", stats.WeightedCalls, len(p.Calls))
 	}
 	if _, err := reduced.SerializeForExec(); err != nil {
 		t.Fatalf("reduced program is not executable: %v\n%s", err, reduced.Serialize())
@@ -228,7 +236,7 @@ func TestReduceProgKeepsCopiedInCallsStructural(t *testing.T) {
 	}
 }
 
-func TestReduceProgHonorsLiveResourceCap(t *testing.T) {
+func TestReduceProgDoesNotDropStructuralResourcesForLiveCap(t *testing.T) {
 	p := testProg(t, ""+
 		"r0 = test$res2()\n"+
 		"r1 = test$res2()\n"+
@@ -239,11 +247,11 @@ func TestReduceProgHonorsLiveResourceCap(t *testing.T) {
 		MaxLiveResources:  1,
 		IncludeConsts:     true,
 	})
-	if len(reduced.Calls) != 2 {
-		t.Fatalf("got %d calls, want first producer and its use:\n%s", len(reduced.Calls), reduced.Serialize())
+	if len(reduced.Calls) != len(p.Calls) {
+		t.Fatalf("got %d calls, want all structural resource calls:\n%s", len(reduced.Calls), reduced.Serialize())
 	}
-	if stats.DroppedResources == 0 {
-		t.Fatalf("expected resource-cap drops, got stats %+v", stats)
+	if stats.DroppedResources != 0 {
+		t.Fatalf("structural resource calls were dropped: %+v", stats)
 	}
 	if _, err := reduced.SerializeForExec(); err != nil {
 		t.Fatalf("reduced program is not executable: %v\n%s", err, reduced.Serialize())

@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/syzkaller/pkg/flatrpc"
+	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
 	"github.com/stretchr/testify/assert"
 )
@@ -85,6 +86,18 @@ func TestLinuxSyscalls(t *testing.T) {
 	for feat, info := range features {
 		if !info.Enabled {
 			t.Errorf("feature %v is not enabled: %v", flatrpc.EnumNamesFeature[feat], info.Reason)
+		}
+	}
+}
+
+func TestCSBSyscallChecks(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range target.Syscalls {
+		if strings.HasPrefix(call.CallName, "syz_csb_") && linuxSyscallChecks[call.CallName] == nil {
+			t.Errorf("missing syscall check for %s", call.CallName)
 		}
 	}
 }

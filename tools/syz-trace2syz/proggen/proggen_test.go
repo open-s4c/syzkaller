@@ -643,8 +643,9 @@ func TestTaskCreationLifecycleFromTrace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(src), test.want) {
-				t.Fatalf("generated CSB header missing %q:\n%s", test.want, src)
+			helper := "UNIQUE_FUNC(" + strings.TrimSuffix(test.want, "()") + ")()"
+			if !strings.Contains(string(src), helper) {
+				t.Fatalf("generated CSB header missing %q:\n%s", helper, src)
 			}
 		})
 	}
@@ -704,6 +705,62 @@ func TestTaskCreationLifecycleCompiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		os.Remove(bin)
+	}
+}
+
+func TestAIOCallsUseBoundedLifecycles(t *testing.T) {
+	for _, name := range []string{"io_setup", "io_getevents", "io_pgetevents", "io_destroy", "io_submit", "io_cancel"} {
+		t.Run(name, func(t *testing.T) {
+			p := parseSingleProg(t, name+"() = 0")
+			want := "syz_csb_" + name + "()[0]"
+			if got := strings.TrimSpace(string(p.Serialize())); got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+			src, _, err := csource.Write(p, csource.Options{Slowdown: 1, CSB: true, Trace: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if helper := "UNIQUE_FUNC(syz_csb_" + name + ")()"; !strings.Contains(string(src), helper) {
+				t.Fatalf("generated CSB header missing %q", helper)
+			}
+		})
+	}
+}
+
+func TestRtSigactionUsesGeneratedHandler(t *testing.T) {
+	p := parseSingleProg(t, `rt_sigaction(10, {sa_handler=0x1234}, NULL, 8) = 0`)
+	if got := strings.TrimSpace(string(p.Serialize())); got != "syz_csb_rt_sigaction()[0]" {
+		t.Fatalf("got %q", got)
+	}
+	src, _, err := csource.Write(p, csource.Options{Slowdown: 1, CSB: true, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "UNIQUE_FUNC(syz_csb_rt_sigaction)"; !strings.Contains(string(src), want) {
+		t.Fatalf("generated CSB header missing %q", want)
+	}
+	for _, want := range []string{"csb_rt_sigaction_lifecycle", "_exit("} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("generated helper missing %q", want)
+		}
+	}
+}
+
+func TestRtSigreturnUsesDeliveredSignal(t *testing.T) {
+	p := parseSingleProg(t, `rt_sigreturn() = 0`)
+	if got := strings.TrimSpace(string(p.Serialize())); got != "syz_csb_rt_sigreturn()[0]" {
+		t.Fatalf("got %q", got)
+	}
+	src, _, err := csource.Write(p, csource.Options{Slowdown: 1, CSB: true, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"csb_rt_sigreturn_lifecycle", "_exit(", "SIG_UNBLOCK", "SIG_SETMASK",
+	} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("generated helper missing %q", want)
+		}
 	}
 }
 
@@ -831,7 +888,7 @@ func TestResumedCallAfterExecIsKept(t *testing.T) {
 	}
 }
 
-func TestExitCallsAreSkipped(t *testing.T) {
+func TestExitCallsUseBoundedLifecycles(t *testing.T) {
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
 	if err != nil {
 		t.Fatal(err)
@@ -846,8 +903,32 @@ func TestExitCallsAreSkipped(t *testing.T) {
 	if !strings.Contains(got, "syz_csb_execve()") {
 		t.Fatalf("exec lifecycle was lost:\n%s", got)
 	}
-	if strings.Contains(got, "exit(") || strings.Contains(got, "exit_group(") {
-		t.Fatalf("process termination call remained:\n%s", got)
+	for _, want := range []string{"syz_csb_exit()[0]", "syz_csb_exit_group()[0]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bounded termination helper %q missing:\n%s", want, got)
+		}
+	}
+	src, _, err := csource.Write(genProg(trace, target, false, false, false, false),
+		csource.Options{Slowdown: 1, CSB: true, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"UNIQUE_FUNC(syz_csb_exit)", "UNIQUE_FUNC(syz_csb_exit_group)"} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("generated CSB header missing %q", want)
+		}
+	}
+	arm64, err := prog.GetTarget(targets.Linux, targets.ARM64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arm64Src, _, err := csource.Write(genProg(trace, arm64, false, false, false, false),
+		csource.Options{Slowdown: 1, CSB: true, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(arm64Src), "#include <signal.h>") {
+		t.Fatal("clone-based exit helper is missing SIGCHLD definition")
 	}
 }
 
