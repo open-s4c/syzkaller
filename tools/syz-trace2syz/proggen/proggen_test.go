@@ -24,6 +24,14 @@ func TestParse(t *testing.T) {
 		output string
 	}
 	tests := []Test{
+		// A single exec string-array element is flattened to BufferType by the parser.
+		// Keep this on a supported exec path so genArray must consume that buffer.
+		{`
+execve("\x2f\x62\x69\x6e\x2f\x74\x6f\x6f\x6c", ["\x2f\x62\x69\x6e\x2f\x74\x6f\x6f\x6c"], ["\x41\x3d\x42"]) = 0
+`, `
+syz_csb_execve()[0]
+`,
+		},
 		{`
 socket(37, 1, 0) = 3
 setsockopt(3, 278, 128, "abc", 3) = 0
@@ -643,8 +651,9 @@ func TestTaskCreationLifecycleFromTrace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(src), test.want) {
-				t.Fatalf("generated CSB header missing %q:\n%s", test.want, src)
+			helper := "UNIQUE_FUNC(" + strings.TrimSuffix(test.want, "()") + ")()"
+			if !strings.Contains(string(src), helper) {
+				t.Fatalf("generated CSB header missing %q:\n%s", helper, src)
 			}
 		})
 	}
@@ -704,6 +713,43 @@ func TestTaskCreationLifecycleCompiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		os.Remove(bin)
+	}
+}
+
+func TestAIOCallsUseBoundedLifecycles(t *testing.T) {
+	for _, name := range []string{"io_setup", "io_getevents", "io_pgetevents", "io_destroy", "io_submit", "io_cancel"} {
+		t.Run(name, func(t *testing.T) {
+			p := parseSingleProg(t, name+"() = 0")
+			want := "syz_csb_" + name + "()[0]"
+			if got := strings.TrimSpace(string(p.Serialize())); got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+			src, _, err := csource.Write(p, csource.Options{Slowdown: 1, CSB: true, Trace: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if helper := "UNIQUE_FUNC(syz_csb_" + name + ")()"; !strings.Contains(string(src), helper) {
+				t.Fatalf("generated CSB header missing %q", helper)
+			}
+			if name == "io_cancel" {
+				for _, want := range []string{"#include <time.h>", "IOCB_CMD_POLL", "eventfd(0"} {
+					if !strings.Contains(string(src), want) {
+						t.Fatalf("generated cancel lifecycle missing %q", want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAIOCallsNormalizeSyntheticResults(t *testing.T) {
+	p := parseSingleProg(t, "io_submit() = 3")
+	if got := strings.TrimSpace(string(p.Serialize())); got != "syz_csb_io_submit()[0]" {
+		t.Fatalf("got %q", got)
+	}
+	p = parseSingleProg(t, "io_getevents() = -1 EINVAL (Invalid argument)")
+	if len(p.Calls) != 0 {
+		t.Fatalf("failed AIO call was retained: %s", p.Serialize())
 	}
 }
 

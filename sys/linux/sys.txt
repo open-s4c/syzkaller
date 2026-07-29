@@ -381,6 +381,14 @@ syz_csb_thread_create_join() (automatic_helper)
 syz_csb_fork_wait() (automatic_helper)
 syz_csb_vfork_wait() (automatic_helper)
 
+# CSB legacy AIO helpers replace process-local trace pointers with one bounded lifecycle.
+syz_csb_io_setup() (automatic_helper)
+syz_csb_io_getevents() (automatic_helper)
+syz_csb_io_pgetevents() (automatic_helper)
+syz_csb_io_destroy() (automatic_helper)
+syz_csb_io_submit() (automatic_helper)
+syz_csb_io_cancel() (automatic_helper)
+
 # We need these disabled definitions to simplify the presence and the NR checking.
 clone(flags flags[clone_flags], sp buffer[in], parentid ptr[out, int32], childtid ptr[out, int32], tls buffer[in]) (breaks_returns, disabled)
 clone3(args ptr[in, clone_args], size bytesize[args]) pid (breaks_returns, disabled)

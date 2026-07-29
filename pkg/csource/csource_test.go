@@ -900,3 +900,21 @@ func TestLoopIdenticalCalls(t *testing.T) {
 		}
 	}
 }
+
+func TestCSBHelpersNamespaced(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := target.Deserialize([]byte("syz_csb_io_setup()\nsyz_csb_thread_create_join()\n"), prog.NonStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _, err := Write(p, Options{CSB: true, Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"syz_csb_io_setup", "syz_csb_thread_create_join"} {
+		assert.GreaterOrEqual(t, strings.Count(string(src), "UNIQUE_FUNC("+name+")"), 2)
+	}
+}

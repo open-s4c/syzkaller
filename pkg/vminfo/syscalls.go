@@ -68,9 +68,9 @@ func (ctx *checkContext) do(fileInfos []*flatrpc.FileInfo, featureInfos []*flatr
 		}
 		ctx.pendingSyscalls++
 		syscallCheck := ctx.impl.syscallCheck
-		if strings.HasPrefix(call.CallName, "syz_ext_") {
-			// Non-mainline pseudo-syscalls in executor/common_ext.h can't have
-			// the checking function and are assumed to be unconditionally supported.
+		if strings.HasPrefix(call.CallName, "syz_ext_") || strings.HasPrefix(call.CallName, "syz_csb_") {
+			// Out-of-tree executor helpers can't have a checking function and are
+			// assumed to be unconditionally supported.
 			syscallCheck = alwaysSupported
 		}
 		// HostFuzzer targets can't run Go binaries on the targets,

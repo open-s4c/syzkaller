@@ -21,12 +21,5 @@ var (
 		"rt_sigsuspend":   true,
 		// Require function pointers which are not recovered by strace
 		"rt_sigaction": true,
-		// io_ syscalls pass resource via pointers [io_ctx], which is not supported yet
-		"io_setup":      true,
-		"io_getevents":  true,
-		"io_pgetevents": true,
-		"io_destroy":    true,
-		"io_submit":     true,
-		"io_cancel":     true,
 	}
 )
