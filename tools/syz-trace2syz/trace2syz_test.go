@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/google/syzkaller/sys/targets"
+	"github.com/google/syzkaller/tools/syz-trace2syz/proggen"
 )
 
 func TestTrace2SyzDefaultArch(t *testing.T) {
@@ -67,6 +68,9 @@ close(3) = 0
 		t.Run(arch, func(t *testing.T) {
 			out := runTrace2SyzForArch(t, tracePath, arch)
 			for name, data := range out {
+				if filepath.Ext(name) != ".prog" {
+					continue
+				}
 				if !bytes.Contains(data, []byte("# csb.trace.os=linux\n")) {
 					t.Fatalf("%s missing os metadata:\n%s", name, data)
 				}
@@ -114,8 +118,32 @@ func runTrace2SyzForArch(t *testing.T, tracePath, arch string) map[string][]byte
 		*flagArch = oldArch
 	})
 
-	parseTraces(initializeTarget(*flagOS, *flagArch))
+	progs, stats := parseTraces(initializeTarget(*flagOS, *flagArch))
+	writeTranslationReport(outDir, stats, progs)
 	return readOutputFiles(t, outDir)
+}
+
+func TestFormatTranslationReport(t *testing.T) {
+	stats := proggen.NewTranslationStats()
+	stats.Input = map[string]int{"clone": 2, "read": 3, "write": 1}
+	stats.Represented = map[string]int{"clone": 2, "read": 2}
+	stats.Helpers = map[string]map[string]int{
+		"syz_csb_thread_create_join": {"clone": 2},
+	}
+	got := string(formatTranslationReport(stats, map[string]int{
+		"read": 2, "syz_csb_thread_create_join": 2,
+	}))
+	want := "" +
+		"Input syscall-name coverage: 2/3 (66.67%)\n" +
+		"Absent input syscall names (1):\n" +
+		"  write\n" +
+		"Generated syzlang helpers (1):\n" +
+		"  syz_csb_thread_create_join (2 calls): clone=2\n" +
+		"Input syscall-call coverage: 4/6 (66.67%)\n" +
+		"Raw syscall call counts (strace/generated syzlang): 6/4\n"
+	if got != want {
+		t.Fatalf("unexpected report:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 func readOutputFiles(t *testing.T, dir string) map[string][]byte {
