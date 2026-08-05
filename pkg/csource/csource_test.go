@@ -619,6 +619,31 @@ func TestCSBClosesUnusedDupResults(t *testing.T) {
 	}
 }
 
+func TestCSBOverrideGuardsSurvivePreprocessing(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := target.Deserialize([]byte("getpid()\n"), prog.NonStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _, err := Write(p, Options{CSB: true, Repeat: true, RepeatTimes: 3, Slowdown: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for macro, value := range map[string]string{
+		"BM_THREAD_NUM": "1",
+		"BM_THREAD_IDX": "0",
+		"BM_CTX_TID":    "0",
+		"REPEAT_NUM":    "3",
+	} {
+		guard := fmt.Sprintf("#ifndef %s\n#define %s %s\n#endif", macro, macro, value)
+		assert.Containsf(t, string(src), guard,
+			"%s must remain overridable in the emitted CSB header", macro)
+	}
+}
+
 func assertCSBExecIdentifiersNamespaced(t *testing.T, src []byte) {
 	t.Helper()
 	// Strip text that cannot declare or reference a C identifier. In particular,

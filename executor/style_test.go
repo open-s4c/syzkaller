@@ -54,8 +54,9 @@ if (foo) {
 		},
 		{
 			// These are also not properly stripped by pkg/csource.
-			pattern: `/\*[^{/"]`,
-			message: "Don't use /* */ block comments. Use // line comments instead",
+			pattern:     `/\*[^{/"]`,
+			suppression: `/\*#(?:ifndef|endif)\*/`,
+			message:     "Don't use /* */ block comments. Use // line comments instead",
 			tests: []string{
 				`/* C++ comment */`,
 			},

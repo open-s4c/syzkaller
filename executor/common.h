@@ -63,7 +63,7 @@ typedef signed int ssize_t;
 #endif
 
 #if CSB
-#include <fcntl.h> /* Definition of AT_* constants */
+#include <fcntl.h> // Definition of AT_* constants.
 #include <sys/stat.h>
 // expect a
 // #define BM_THREAD_NUM <uint>
@@ -307,14 +307,12 @@ static void __attribute__((noinline)) UNIQUE_FUNC(remove_tmp_dir)(const char* di
 			UNIQUE_FUNC(remove_tmp_dir)(filename);
 			continue;
 		}
-		if (unlink(filename)) {
+		if (unlink(filename))
 			exitf("unlink(%s) failed", filename);
-		}
 	}
 	closedir(dp);
-	while (rmdir(dir)) {
+	while (rmdir(dir))
 		exitf("rmdir(%s) failed", dir);
-	}
 }
 
 #endif

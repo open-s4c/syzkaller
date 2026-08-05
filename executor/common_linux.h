@@ -6008,7 +6008,9 @@ static long syz_csb_vfork_wait(void)
 {
 	long pid = vfork();
 	if (pid == 0) {
-		_exit(0);
+		syscall(__NR_exit, 0);
+		for (;;) {
+		}
 	}
 	return pid < 0 ? -1 : csb_wait_child(pid);
 }
