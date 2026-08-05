@@ -204,6 +204,37 @@ r0 = openat(0xffffffffffffff9c, &(0x7f0000000000)='/tmp/file\x00', 0x0, 0x0)
 	}
 }
 
+func TestSanitizeProgramUsesFirstPathType(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := target.ConstMap["O_DIRECTORY"]
+	for _, test := range []struct {
+		name      string
+		firstFlag uint64
+		wantDir   bool
+	}{
+		{"directory first", directory, true},
+		{"file first", 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := deserializeTestProg(t, fmt.Sprintf(`
+r0 = openat(0xffffffffffffff9c, &(0x7f0000000000)='/tmp/same\x00', 0x%x, 0x0)
+r1 = openat(0xffffffffffffff9c, &(0x7f0000000040)='/tmp/same\x00', 0x%x, 0x0)
+`, test.firstFlag, directory-test.firstFlag))
+			_, subdirs, _, filemap, _, _ := sanitizeProgram(p, "test.prog")
+			gotFile := false
+			for _, path := range filemap {
+				gotFile = gotFile || path == "./tmp/same"
+			}
+			if subdirs["./tmp/same"] != test.wantDir || gotFile == test.wantDir {
+				t.Fatalf("subdirs=%v filemap=%v, want directory=%v", subdirs, filemap, test.wantDir)
+			}
+		})
+	}
+}
+
 func sanitizeRecordedOpenWithGenerationArch(t *testing.T, recordedArch, generationArch string) (
 	*prog.Prog, map[string]bool, map[uint64]uint64, map[uint64]string, uint64, uint64,
 ) {

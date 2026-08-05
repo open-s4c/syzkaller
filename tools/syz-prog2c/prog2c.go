@@ -138,6 +138,13 @@ type openFlagConsts struct {
 	HasDirectory bool
 }
 
+type pathKind uint8
+
+const (
+	pathFile pathKind = iota
+	pathDirectory
+)
+
 // targetOpenFlagConsts avoids applying host or amd64 flag values to cross-architecture programs.
 func targetOpenFlagConsts(target *prog.Target) openFlagConsts {
 	directory, hasDirectory := target.ConstMap["O_DIRECTORY"]
@@ -351,11 +358,20 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 	filemap := make(map[uint64](string))
 	maxWriteSize := uint64(0)
 	openFlags := targetOpenFlagConsts(p.Target)
+	initialPathKinds := make(map[string]pathKind)
 	for idx, call := range p.Calls {
 		p.AnnotateResources(idx)
 		switch call.Meta.Name {
 		case "openat":
 			subdirs, filemap = sanitizeOpenAt(call, openFlags, subdirs, filemap)
+			path := string(removeTrailingNullChars(call.Args[1].(*prog.PointerArg).Res.(*prog.DataArg).Data()))
+			if _, ok := initialPathKinds[path]; !ok {
+				kind := pathFile
+				if openFlags.HasDirectory && call.Args[2].(*prog.ConstArg).Val&openFlags.Directory != 0 {
+					kind = pathDirectory
+				}
+				initialPathKinds[path] = kind
+			}
 		case "pwrite64":
 			filesizes = sanitizePwrite64(call, filesizes)
 			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
@@ -394,6 +410,20 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 			sanitizeSockaddrInArg(call, 1, syscall.AF_INET)
 		case "bind$inet6":
 			sanitizeSockaddrInArg(call, 1, syscall.AF_INET6)
+		}
+	}
+
+	// A path may change type during a trace. Initialize only its first observed
+	// type and let the retained syscalls perform later transitions.
+	for resource, path := range filemap {
+		if initialPathKinds[path] == pathDirectory {
+			delete(filemap, resource)
+			delete(filesizes, resource)
+		}
+	}
+	for path, kind := range initialPathKinds {
+		if kind == pathFile {
+			delete(subdirs, path)
 		}
 	}
 
