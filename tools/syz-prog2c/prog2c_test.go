@@ -145,6 +145,18 @@ func TestSanitizeProgramOpenAndPwrite(t *testing.T) {
 	}
 }
 
+func TestSanitizeProgramSizesSequentialReadFixture(t *testing.T) {
+	p := deserializeTestProg(t, `
+r0 = openat(0xffffffffffffff9c, &(0x7f0000000000)='/etc/localtime\x00', 0x0, 0x0)
+read(r0, &(0x7f0000000040)=""/4096, 0x1000)
+lseek(r0, 0xfffffffffffffeaa, 0x1)
+`)
+	_, _, filesizes, _, _, _ := sanitizeProgram(p, "test.prog")
+	if got := filesizes[0]; got < 0x1000 {
+		t.Fatalf("fixture size = %#x, want at least %#x", got, 0x1000)
+	}
+}
+
 func TestSanitizeMaxWriteSizeNullBuffer(t *testing.T) {
 	p := deserializeTestProg(t, `
 write(0xffffffffffffffff, 0x0, 0x20)
