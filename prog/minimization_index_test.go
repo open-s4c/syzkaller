@@ -141,6 +141,22 @@ func TestRelatedCallsFullThreadIndexedRebuildsForNewProg(t *testing.T) {
 	}
 }
 
+func TestRelatedCallsIncludeParentPathSetup(t *testing.T) {
+	p := deserializeDependencyProg(t, ""+
+		"<1>mutate5(&(0x7f0000000000)='./db\\x00', 0x0)\n"+
+		"<1>mutate9(&(0x7f0000000040)='./db/current\\x00')\n"+
+		"<1>mutate9(&(0x7f0000000100)='./other/file\\x00')\n")
+
+	keep, _ := relatedCallsFullThread(p, 1, testDependencyCache(len(p.Calls)),
+		make([]bool, len(p.Calls)))
+	if !keep[0] {
+		t.Fatal("setup of parent path was not retained")
+	}
+	if keep[2] {
+		t.Fatal("unrelated path was retained")
+	}
+}
+
 func TestRelatedCallComponentsForThreadMatchesScanLoop(t *testing.T) {
 	p := deserializeDependencyProg(t, ""+
 		"<2>r0 = socket(0x111, 0x1000, 0x10000)\n"+
