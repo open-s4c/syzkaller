@@ -1150,39 +1150,13 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, initCall bool, ci int, force
 
 	for i, arg := range call.Args {
 		if ctx.opts.CSB {
+			if csbSandboxDirfdArg(callName, i) {
+				argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
+				continue
+			}
 			switch i {
 			// argument index 0
 			case 0:
-				//TODO: check if argument is dirfd already and keep it in that case
-				switch callName {
-				case "readlinkat":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				case "openat":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				case "faccessat":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				case "faccessat2":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				case "newfstatat":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				case "unlinkat":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				case "mknodat":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				case "fchownat":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				case "fchmodat":
-					argsStrs = append(argsStrs, "UNIQUE_VAR(ctx->dirfd)")
-					continue
-				}
 			// argument index 1
 			case 1:
 				switch call.Meta.Name {
@@ -1300,6 +1274,19 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, initCall bool, ci int, force
 			src, dst, funcName, strings.Join(argsStrs, ", "))
 	}
 	return fmt.Sprintf("%v(%v)", funcName, strings.Join(argsStrs, ", "))
+}
+
+func csbSandboxDirfdArg(callName string, arg int) bool {
+	switch callName {
+	case "renameat", "renameat2", "linkat":
+		return arg == 0 || arg == 2
+	case "symlinkat":
+		return arg == 1
+	case "readlinkat", "openat", "openat2", "faccessat", "faccessat2", "newfstatat",
+		"unlinkat", "mkdirat", "mknodat", "fchownat", "fchmodat", "utimensat", "statx":
+		return arg == 0
+	}
+	return false
 }
 
 func (ctx *context) protectCSBControlFD(callName string, arg int, val string) string {

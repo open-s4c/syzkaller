@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -114,6 +115,24 @@ func TestCSBReappliesCurrentAffinity(t *testing.T) {
 	assert.Contains(t, string(src), "UNIQUE_VAR(AffinityMaskState) * am = &UNIQUE_VAR(am_state);")
 	assert.Contains(t, string(src), "pthread_key_create(&am->affinity_mask_key, free)")
 	assert.Contains(t, string(src), "UNIQUE_FUNC(cleanup_affinity_mask)();")
+}
+
+func TestCSBSandboxDirfdArguments(t *testing.T) {
+	for _, test := range []struct {
+		call string
+		args []int
+	}{
+		{"mkdirat", []int{0}},
+		{"renameat", []int{0, 2}},
+		{"renameat2", []int{0, 2}},
+		{"linkat", []int{0, 2}},
+		{"symlinkat", []int{1}},
+	} {
+		for i := 0; i < 5; i++ {
+			assert.Equal(t, slices.Contains(test.args, i), csbSandboxDirfdArg(test.call, i),
+				"%s argument %d", test.call, i)
+		}
+	}
 }
 
 func TestCSBEmptyNetworkMetadata(t *testing.T) {
