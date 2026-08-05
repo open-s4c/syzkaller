@@ -658,6 +658,7 @@ func generateComment(call *prog.Call) string {
 func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool, initIndices []int,
 	dataMmap bool) ([]string, []uint64, error) {
 	msgSizes := make([]uint64, len(p.Calls))
+	expected := make([]*int64, len(p.Calls))
 	var comments []string
 	if addComments {
 		comments = make([]string, len(p.Calls))
@@ -668,6 +669,10 @@ func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool, ini
 
 	// generate sendmsg, recvmsg sizes
 	for i, call := range p.Calls {
+		if call.StraceRetValSet {
+			value := call.StraceRetVal
+			expected[i] = &value
+		}
 		if call.Meta.CallName == "recvmsg" || call.Meta.CallName == "sendmsg" {
 			if len(call.Args) <= 1 {
 				continue
@@ -725,12 +730,17 @@ func (ctx *context) generateProgCalls(p *prog.Prog, trace, addComments bool, ini
 	if err != nil {
 		return nil, nil, err
 	}
-	calls, vars := ctx.generateCalls(decoded, trace, addComments, comments, msgSizes, initIndices, dataMmap)
+	calls, vars := ctx.generateCalls(decoded, trace, addComments, comments, msgSizes, expected,
+		initIndices, dataMmap)
 	return calls, vars, nil
 }
 
 func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
-	callComments []string, msgSizes []uint64, initIndices []int, dataMmap bool) ([]string, []uint64) {
+	callComments []string, msgSizes []uint64, expected []*int64, initIndices []int,
+	dataMmap bool) ([]string, []uint64) {
+	if len(expected) < len(p.Calls) {
+		expected = make([]*int64, len(p.Calls))
+	}
 	var calls []string
 	csumSeq := 0
 	localIO := localIOResources(p, ctx.target)
@@ -839,7 +849,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 			fmt.Fprintf(w, "\tintptr_t csb_fcntl_cmd_%d = %s;\n", ci, cmd)
 		}
 		ctx.emitCall(w, call, ci, resCopyout || argCopyout || closeUnusedDup, trace, initCall,
-			forceNonblockArg, dynamicFcntlCommand, csbFIONBIO, csbMQAttr, dataMmap)
+			forceNonblockArg, dynamicFcntlCommand, csbFIONBIO, csbMQAttr, dataMmap, expected[ci])
 		if closeUnusedDup {
 			fmt.Fprintf(w, "\tif (res > 2) close((int)res);\n")
 		}
@@ -847,7 +857,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 			fmt.Fprintf(w, "\tfor (int i = 0; i < %v; i++) {\n", call.Props.Rerun)
 			// Rerun invocations should not affect the result value.
 			ctx.emitCall(w, call, ci, false, false, initCall, forceNonblockArg,
-				dynamicFcntlCommand, csbFIONBIO, csbMQAttr, dataMmap)
+				dynamicFcntlCommand, csbFIONBIO, csbMQAttr, dataMmap, expected[ci])
 			fmt.Fprintf(w, "\t}\n")
 		}
 		if ctx.opts.CSB && call.Meta.CallName == "openat2" {
@@ -1030,7 +1040,8 @@ func isNative(sysTarget *targets.Target, callName string) bool {
 }
 
 func (ctx *context) emitCall(w *bytes.Buffer, call prog.ExecCall, ci int, haveCopyout, trace, initCall bool,
-	forceNonblockArg int, dynamicFcntlCommand, csbFIONBIO, csbMQAttr, dataMmap bool) {
+	forceNonblockArg int, dynamicFcntlCommand, csbFIONBIO, csbMQAttr, dataMmap bool,
+	expected *int64) {
 	native := isNative(ctx.sysTarget, call.Meta.CallName)
 	fmt.Fprintf(w, "\t")
 	if !native {
@@ -1067,7 +1078,12 @@ func (ctx *context) emitCall(w *bytes.Buffer, call prog.ExecCall, ci int, haveCo
 			cast = "(intptr_t)(int)"
 		}
 		if ctx.opts.CSB {
-			fmt.Fprintf(w, "\tif (res == -1 ) { assert(!abort_on_fail); UNIQUE_VAR(ctx->num_failed)++;} else {UNIQUE_VAR(ctx->num_succeeded)++;};\n")
+			success := "res != -1"
+			if expected != nil && *expected < 0 {
+				success = "res == -1"
+			}
+			fmt.Fprintf(w, "\tif (%s) { UNIQUE_VAR(ctx->num_succeeded)++; } else { "+
+				"assert(!abort_on_fail); UNIQUE_VAR(ctx->num_failed)++; }\n", success)
 		} else {
 			fmt.Fprintf(w, "\tfprintf(stderr, \"### call=%v errno=%%u\\n\", %vres == -1 ? errno : 0);\n", ci, cast)
 		}

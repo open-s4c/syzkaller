@@ -116,6 +116,30 @@ func TestCSBReappliesCurrentAffinity(t *testing.T) {
 	assert.Contains(t, string(src), "UNIQUE_FUNC(cleanup_affinity_mask)();")
 }
 
+func TestCSBCountsExpectedFailuresAsSuccessful(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		program string
+		want    string
+	}{
+		{"getpid()[-1]\n", "if (res == -1) { UNIQUE_VAR(ctx->num_succeeded)++;"},
+		{"getpid()[123]\n", "if (res != -1) { UNIQUE_VAR(ctx->num_succeeded)++;"},
+	} {
+		p, err := target.Deserialize([]byte(test.program), prog.NonStrict)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, _, err := Write(p, Options{CSB: true, Trace: true, Slowdown: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Contains(t, string(src), test.want)
+	}
+}
+
 func TestCSBEmptyNetworkMetadata(t *testing.T) {
 	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
 	if err != nil {
@@ -391,7 +415,7 @@ func TestCSBOpenat2DynamicSizeUsesSnapshotSize(t *testing.T) {
 		p: p, opts: Options{CSB: true, Slowdown: 1}, target: target,
 		sysTarget: targets.Get(target.OS, target.Arch), calls: make(map[string]uint64),
 	}
-	calls, _ := ctx.generateCalls(decoded, false, false, nil, nil, nil, false)
+	calls, _ := ctx.generateCalls(decoded, false, false, nil, nil, nil, nil, false)
 	assert.Contains(t, calls[1], "(intptr_t)&csb_open_how_1")
 	assert.Contains(t, calls[1], "sizeof(csb_open_how_1)")
 	assert.NotContains(t, calls[1], "/*size=*/UNIQUE_VAR(ctx->r)[0]")
@@ -505,7 +529,7 @@ func TestCSBDynamicOpenFlagsAndFcntlCommand(t *testing.T) {
 		p: p, opts: Options{CSB: true, Slowdown: 1}, target: target,
 		sysTarget: targets.Get(target.OS, target.Arch), calls: make(map[string]uint64),
 	}
-	calls, _ := ctx.generateCalls(decoded, false, false, nil, nil, nil, false)
+	calls, _ := ctx.generateCalls(decoded, false, false, nil, nil, nil, nil, false)
 	assert.Contains(t, calls[1], "(UNIQUE_VAR(ctx->r)[0] | O_NONBLOCK)")
 	assert.Contains(t, calls[2], "syscall(__NR_open")
 	assert.Contains(t, calls[3], "intptr_t csb_fcntl_cmd_3 = UNIQUE_VAR(ctx->r)[0]")
