@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -50,7 +51,8 @@ var (
 func main() {
 	flag.Parse()
 	target := initializeTarget(*flagOS, *flagArch)
-	progs := parseTraces(target)
+	progs, stats := parseTraces(target)
+	writeTranslationReport(*flagDeserialize, stats, progs)
 	if !*flagSkipCorpus {
 		log.Logf(0, "successfully converted traces; generating corpus.db")
 		pack(progs)
@@ -100,10 +102,11 @@ func genSyscallHist(p *prog.Prog) map[string]int {
 	return hist
 }
 
-func parseTraces(target *prog.Target) []*prog.Prog {
+func parseTraces(target *prog.Target) ([]*prog.Prog, *proggen.TranslationStats) {
 	var ret []*prog.Prog
 	var names []string
 	progPrefix := make(map[*prog.Prog]string)
+	stats := proggen.NewTranslationStats()
 
 	outPrefixesIdx := make(map[string]int)
 
@@ -121,7 +124,9 @@ func parseTraces(target *prog.Target) []*prog.Prog {
 	fmt.Fprintf(os.Stderr, "Parsing %v traces\n", totalFiles)
 	for i, file := range names {
 		fmt.Fprintf(os.Stderr, "Parsing file %v/%v: %v\n", i+1, totalFiles, filepath.Base(names[i]))
-		progs, err := proggen.ParseFile(file, target, *flagSplitThreads, *flagArgLength, *flagMadviseSetup)
+		progs, fileStats, err := proggen.ParseFileWithStats(file, target, *flagSplitThreads,
+			*flagArgLength, *flagMadviseSetup)
+		stats.Merge(fileStats)
 		fmt.Fprintf(os.Stderr, "Generated %d programs\n", len(progs))
 		for idx, p := range progs {
 			fmt.Fprintf(os.Stderr, "Length of program %d: %d\n", idx+1, len(p.Calls))
@@ -156,7 +161,84 @@ func parseTraces(target *prog.Target) []*prog.Prog {
 		log.Logf(0, "Stored program %s", progName)
 		i++
 	}
-	return ret
+	return ret, stats
+}
+
+func writeTranslationReport(dir string, stats *proggen.TranslationStats, progs []*prog.Prog) {
+	if dir == "" {
+		return
+	}
+	generated := make(map[string]int)
+	for _, p := range progs {
+		for name, count := range genSyscallHist(p) {
+			generated[name] += count
+		}
+	}
+	data := formatTranslationReport(stats, generated)
+	if err := osutil.WriteFile(filepath.Join(dir, "translation_report.txt"), data); err != nil {
+		log.Fatalf("failed to write translation report: %v", err)
+	}
+}
+
+func formatTranslationReport(stats *proggen.TranslationStats, generated map[string]int) []byte {
+	var report strings.Builder
+	var absent []string
+	inputCalls, representedCalls, representedNames := 0, 0, 0
+	for name, count := range stats.Input {
+		inputCalls += count
+		representedCalls += stats.Represented[name]
+		if stats.Represented[name] == 0 {
+			absent = append(absent, name)
+		} else {
+			representedNames++
+		}
+	}
+	sort.Strings(absent)
+	fmt.Fprintf(&report, "Input syscall-name coverage: %d/%d (%.2f%%)\n",
+		representedNames, len(stats.Input), percent(representedNames, len(stats.Input)))
+	fmt.Fprintf(&report, "Absent input syscall names (%d):\n", len(absent))
+	for _, name := range absent {
+		fmt.Fprintf(&report, "  %s\n", name)
+	}
+
+	helpers := sortedKeys(stats.Helpers)
+	fmt.Fprintf(&report, "Generated syzlang helpers (%d):\n", len(helpers))
+	for _, helper := range helpers {
+		var sources []string
+		count := 0
+		for source, sourceCount := range stats.Helpers[helper] {
+			count += sourceCount
+			sources = append(sources, fmt.Sprintf("%s=%d", source, sourceCount))
+		}
+		sort.Strings(sources)
+		fmt.Fprintf(&report, "  %s (%d calls): %s\n", helper, count, strings.Join(sources, ", "))
+	}
+
+	generatedCalls := 0
+	for _, count := range generated {
+		generatedCalls += count
+	}
+	fmt.Fprintf(&report, "Input syscall-call coverage: %d/%d (%.2f%%)\n",
+		representedCalls, inputCalls, percent(representedCalls, inputCalls))
+	fmt.Fprintf(&report, "Raw syscall call counts (strace/generated syzlang): %d/%d\n",
+		inputCalls, generatedCalls)
+	return []byte(report.String())
+}
+
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func percent(part, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return 100 * float64(part) / float64(total)
 }
 
 // appendProgMetadata records target identity in namespaced comments understood by downstream tools.

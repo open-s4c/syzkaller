@@ -24,13 +24,22 @@ func lineCounter(r io.Reader) (int, error) {
 	buf := make([]byte, 32*1024)
 	count := 0
 	lineSep := []byte{'\n'}
+	sawData := false
+	lastByte := byte('\n')
 
 	for {
 		c, err := r.Read(buf)
 		count += bytes.Count(buf[:c], lineSep)
+		if c != 0 {
+			sawData = true
+			lastByte = buf[c-1]
+		}
 
 		switch {
 		case err == io.EOF:
+			if sawData && lastByte != '\n' {
+				count++
+			}
 			return count, nil
 
 		case err != nil:
@@ -44,20 +53,22 @@ func ReadFile(filename string) ([]byte, int, error) {
 	var outBuffer []byte
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Fatal(err)
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("open trace: %w", err)
 	}
 	defer file.Close()
 
-	file.Seek(0, 0)
 	numLines, err := lineCounter(file)
 	curLine := 0
-	if err != nil || numLines < 1 {
-		log.Fatal(err)
-		return nil, 0, err
+	if err != nil {
+		return nil, 0, fmt.Errorf("count trace lines: %w", err)
+	}
+	if numLines == 0 {
+		return nil, 0, fmt.Errorf("trace file is empty")
 	}
 
-	file.Seek(0, 0)
+	if _, err := file.Seek(0, 0); err != nil {
+		return nil, 0, fmt.Errorf("rewind trace: %w", err)
+	}
 	scanner := bufio.NewScanner(file)
 	// maxCapacity := int(64 << 20)
 	// buf := make([]byte, maxCapacity)
@@ -76,25 +87,69 @@ func ReadFile(filename string) ([]byte, int, error) {
 	fmt.Fprintf(os.Stderr, "%s\r", strings.Repeat(" ", len(status)))
 
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("scan trace: %w", err)
 	}
 
 	return outBuffer, numLines, nil
 }
 
+// TranslationStats records source calls while their generated calls are known.
+type TranslationStats struct {
+	Input       map[string]int
+	Represented map[string]int
+	Helpers     map[string]map[string]int
+}
+
+func NewTranslationStats() *TranslationStats {
+	return &TranslationStats{
+		Input:       make(map[string]int),
+		Represented: make(map[string]int),
+		Helpers:     make(map[string]map[string]int),
+	}
+}
+
+func (stats *TranslationStats) Merge(other *TranslationStats) {
+	for name, count := range other.Input {
+		stats.Input[name] += count
+	}
+	for name, count := range other.Represented {
+		stats.Represented[name] += count
+	}
+	for helper, sources := range other.Helpers {
+		if stats.Helpers[helper] == nil {
+			stats.Helpers[helper] = make(map[string]int)
+		}
+		for source, count := range sources {
+			stats.Helpers[helper][source] += count
+		}
+	}
+}
+
 func ParseFile(filename string, target *prog.Target, splitThreads bool, argLength, madviseSetup bool) ([]*prog.Prog, error) {
+	progs, _, err := ParseFileWithStats(filename, target, splitThreads, argLength, madviseSetup)
+	return progs, err
+}
+
+func ParseFileWithStats(filename string, target *prog.Target, splitThreads bool,
+	argLength, madviseSetup bool) ([]*prog.Prog, *TranslationStats, error) {
 	fmt.Fprintf(os.Stderr, "Reading file to memory\n")
 	// data, err := os.ReadFile(filename)
 	data, numLines, err := ReadFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("error reading file: %v", err)
+		return nil, nil, fmt.Errorf("error reading file: %v", err)
 	}
-	return ParseData(data, target, splitThreads, argLength, madviseSetup, numLines)
+	stats := NewTranslationStats()
+	progs, err := parseData(data, target, splitThreads, argLength, madviseSetup, numLines, stats)
+	return progs, stats, err
 }
 
 func ParseData(data []byte, target *prog.Target, splitThreads, argLength, madviseSetup bool,
 	numLines int) ([]*prog.Prog, error) {
+	return parseData(data, target, splitThreads, argLength, madviseSetup, numLines, NewTranslationStats())
+}
+
+func parseData(data []byte, target *prog.Target, splitThreads, argLength, madviseSetup bool,
+	numLines int, stats *TranslationStats) ([]*prog.Prog, error) {
 	fmt.Fprintf(os.Stderr, "Parsing data into syscalls\n")
 	tree, trace, err := parser.ParseData(data, splitThreads, numLines)
 	if err != nil {
@@ -109,9 +164,9 @@ func ParseData(data []byte, target *prog.Target, splitThreads, argLength, madvis
 	}
 	var progs []*prog.Prog
 	if splitThreads {
-		parseTree(tree, tree.RootPid, target, &progs, argLength, madviseSetup, true)
+		parseTree(tree, tree.RootPid, target, &progs, argLength, madviseSetup, true, stats)
 	} else {
-		progs = append(progs, genProg(trace, target, argLength, false, madviseSetup, true))
+		progs = append(progs, genProg(trace, target, argLength, false, madviseSetup, true, stats))
 	}
 	return progs, nil
 }
@@ -119,14 +174,14 @@ func ParseData(data []byte, target *prog.Target, splitThreads, argLength, madvis
 // parseTree groups system calls in the trace by process id.
 // The tree preserves process hierarchy i.e. parent->[]child
 func parseTree(tree *parser.TraceTree, pid int64, target *prog.Target, progs *[]*prog.Prog,
-	argLength, madviseSetup, skipBootstrapExec bool) {
+	argLength, madviseSetup, skipBootstrapExec bool, stats *TranslationStats) {
 	log.Logf(2, "parsing trace pid %v", pid)
-	if p := genProg(tree.TraceMap[pid], target, argLength, false, madviseSetup, skipBootstrapExec); p != nil {
+	if p := genProg(tree.TraceMap[pid], target, argLength, false, madviseSetup, skipBootstrapExec, stats); p != nil {
 		*progs = append(*progs, p)
 	}
 	for _, childPid := range tree.Ptree[pid] {
 		if tree.TraceMap[childPid] != nil {
-			parseTree(tree, childPid, target, progs, argLength, madviseSetup, false)
+			parseTree(tree, childPid, target, progs, argLength, madviseSetup, false, stats)
 		}
 	}
 }
@@ -145,8 +200,12 @@ type context struct {
 
 // genProg converts a trace to one of our programs.
 func genProg(trace *parser.Trace, target *prog.Target, argLength, randomized, madviseSetup,
-	skipBootstrapExec bool) *prog.Prog {
+	skipBootstrapExec bool, statsArg ...*TranslationStats) *prog.Prog {
 	var status string
+	stats := NewTranslationStats()
+	if len(statsArg) != 0 {
+		stats = statsArg[0]
+	}
 	retCache := newRCache()
 	ctx := &context{
 		builder:      prog.MakeProgGen(target),
@@ -178,6 +237,7 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength, randomized, ma
 			// 2179  --- SIGUSR1 {si_signo=SIGUSR1, si_code=SI_USER, si_pid=2180, si_uid=0} ---
 			continue
 		}
+		stats.Input[sCall.CallName]++
 		if skipBootstrapExec && !bootstrapExecSkipped && sCall.Pid == rootPID && isSuccessfulExec(sCall) {
 			bootstrapExecSkipped = true
 			continue
@@ -190,7 +250,14 @@ func genProg(trace *parser.Trace, target *prog.Target, argLength, randomized, ma
 		if len(calls) == 0 {
 			continue
 		}
+		stats.Represented[sCall.CallName]++
 		for _, call := range calls {
+			if strings.HasPrefix(call.Meta.CallName, "syz_") {
+				if stats.Helpers[call.Meta.CallName] == nil {
+					stats.Helpers[call.Meta.CallName] = make(map[string]int)
+				}
+				stats.Helpers[call.Meta.CallName][sCall.CallName]++
+			}
 			if err := ctx.builder.Append(call, argLength); err != nil {
 				fmt.Fprintf(os.Stderr, "%s\r", strings.Repeat(" ", len(status)))
 				log.Fatalf("%v", err)
@@ -252,6 +319,22 @@ func (ctx *context) genCalls() []*prog.Call {
 		return singleCall(ctx.genTaskLifecycleCall("syz_csb_fork_wait"))
 	case "vfork":
 		return singleCall(ctx.genTaskLifecycleCall("syz_csb_vfork_wait"))
+	case "io_setup", "io_getevents", "io_pgetevents", "io_destroy", "io_submit", "io_cancel":
+		// Trace AIO contexts and iocb pointers are process-local. Exercise the
+		// requested syscall through a helper that owns a complete, bounded AIO lifecycle.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName))
+	case "exit", "exit_group":
+		// Terminate a disposable child so the repeated CSB worker remains alive.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName))
+	case "rt_sigaction":
+		// Handler addresses are not portable; install and restore a generated no-op handler.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_rt_sigaction"))
+	case "rt_sigreturn":
+		// A real delivered signal lets the kernel construct the architecture-specific frame.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_rt_sigreturn"))
+	case "rt_sigqueueinfo", "rt_sigsuspend":
+		// Target only the current process and guarantee that suspension has a pending wakeup.
+		return singleCall(ctx.genDefaultSafeCall("syz_csb_" + ctx.currentStraceCall.CallName))
 	default:
 		return singleCall(ctx.genCall())
 	}

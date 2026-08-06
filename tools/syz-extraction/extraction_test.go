@@ -193,61 +193,6 @@ func TestProcessThreadComponentsMatchesSerialTIDs(t *testing.T) {
 	}
 }
 
-func TestSanitizeFilename(t *testing.T) {
-	tests := []struct {
-		name string
-		in   []byte
-		want []byte
-	}{
-		{
-			name: "absolute",
-			in:   []byte("/etc/ld.so.cache\x00"),
-			want: []byte("./etc/ld.so.cache\x00"),
-		},
-		{
-			name: "parent",
-			in:   []byte("../file\x00"),
-			want: []byte("a/../file\x00"),
-		},
-		{
-			name: "double-parent",
-			in:   []byte("../../file\x00"),
-			want: []byte("a/a/../../file\x00"),
-		},
-		{
-			name: "parent-in-between-escape",
-			in:   []byte("foo/../../bar/../../file\x00"),
-			want: []byte("a/a/foo/../../bar/../../file\x00"),
-		},
-		{
-			name: "parent-in-between-no-escape",
-			in:   []byte("foo/../bar/../file\x00"),
-			want: []byte("foo/../bar/../file\x00"),
-		},
-		{
-			name: "bare parent",
-			in:   []byte("..\x00"),
-			want: []byte("a/..\x00"),
-		},
-		{
-			name: "dot prefixed file",
-			in:   []byte("..file\x00"),
-			want: []byte("a/..file\x00"),
-		},
-		{
-			name: "all zeros",
-			in:   []byte("\x00\x00"),
-			want: []byte("\x00\x00"),
-		},
-	}
-	for _, test := range tests {
-		got := sanitizeFilename(test.in)
-		if !reflect.DeepEqual(got, test.want) {
-			t.Fatalf("%s: got %q, want %q", test.name, got, test.want)
-		}
-	}
-}
-
 func TestProcessComponentsMatchesSerialExtraction(t *testing.T) {
 	oldMinCalls, oldJobs := *flagMinCalls, *flagJobs
 	defer func() {

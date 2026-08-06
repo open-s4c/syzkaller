@@ -63,20 +63,25 @@ typedef signed int ssize_t;
 #endif
 
 #if CSB
-#include <fcntl.h> /* Definition of AT_* constants */
+#include <fcntl.h> // Definition of AT_* constants.
 #include <sys/stat.h>
+CSB_IFNDEF(CSB_MAX_WAIT_MS)
+#define CSB_MAX_WAIT_MS 1
+CSB_ENDIF
 // expect a
 // #define BM_THREAD_NUM <uint>
 // to have the number of threads for syz_thread or 1 otherwise
-/*#ifndef*/ BM_THREAD_NUM
+// clang-format off
+CSB_IFNDEF(BM_THREAD_NUM)
 #define BM_THREAD_NUM 1
-/*#endif*/
-/*#ifndef*/ BM_THREAD_IDX
+CSB_ENDIF
+CSB_IFNDEF(BM_THREAD_IDX)
 #define BM_THREAD_IDX 0
-/*#endif*/
-/*#ifndef*/ BM_CTX_TID
+CSB_ENDIF
+CSB_IFNDEF(BM_CTX_TID)
 #define BM_CTX_TID 0
-/*#endif*/
+CSB_ENDIF
+// clang-format on
 #define MMAP_LEN (0x1000 + 0x1000000 + 0x1000)
 #define MMAP_SIZE_TOTAL ((BM_THREAD_NUM) * (MMAP_LEN))
 // #define PTR_OFFSET (((BM_THREAD_IDX)*(MMAP_LEN))+((BM_CTX_TID)*(MMAP_SIZE_TOTAL)))
@@ -307,14 +312,12 @@ static void __attribute__((noinline)) UNIQUE_FUNC(remove_tmp_dir)(const char* di
 			UNIQUE_FUNC(remove_tmp_dir)(filename);
 			continue;
 		}
-		if (unlink(filename)) {
+		if (unlink(filename))
 			exitf("unlink(%s) failed", filename);
-		}
 	}
 	closedir(dp);
-	while (rmdir(dir)) {
+	while (rmdir(dir))
 		exitf("rmdir(%s) failed", dir);
-	}
 }
 
 #endif
@@ -636,7 +639,7 @@ static void* UNIQUE_FUNC(thr)(void* arg)
 		UNIQUE_FUNC(event_wait)(&th->ready);
 		UNIQUE_FUNC(event_reset)(&th->ready);
 		UNIQUE_FUNC(execute_call)(th->call);
-		__atomic_fetch_sub(&UNIQUE_VAR(running), 1, __ATOMIC_RELAXED);
+		__atomic_fetch_sub(&UNIQUE_VAR(running), 1, __ATOMIC_RELEASE);
 		UNIQUE_FUNC(event_set)(&th->done);
 	}
 	return 0;
@@ -663,8 +666,17 @@ static void UNIQUE_FUNC(loop)(void)
 #if SYZ_TRACE
 	fprintf(stderr, "### start\n");
 #endif
+#if CSB
+	// A timed-out async worker can still publish results from the prior dispatch.
+	// Skip this dispatch until it has drained rather than resetting underneath it.
+	if (__atomic_load_n(&UNIQUE_VAR(running), __ATOMIC_ACQUIRE))
+		return;
+#endif
 	int i, call, thread;
 	for (call = 0; call < /*{{{NUM_CALLS}}}*/; call++) {
+#if CSB
+/*{{{RESULT_RESETS}}}*/
+#endif
 		for (thread = 0; thread < (int)(sizeof(threads) / sizeof(threads[0])); thread++) {
 			struct thread_t* th = &threads[thread];
 			if (!th->created) {
@@ -697,9 +709,11 @@ static void UNIQUE_FUNC(loop)(void)
 #endif
 
 #if SYZ_REPEAT_TIMES
-/*#ifndef*/ REPEAT_NUM
+// clang-format off
+CSB_IFNDEF(REPEAT_NUM)
 #define REPEAT_NUM /*{{{REPEAT_TIMES}}}*/
-/*#endif*/
+CSB_ENDIF
+// clang-format on
 #endif
 
 #if SYZ_EXECUTOR || SYZ_REPEAT

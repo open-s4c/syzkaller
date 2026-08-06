@@ -153,9 +153,9 @@ static int do_sandbox_none(void)
 		exitf("devlink_pci is not supported");
 #endif
 #if CSB
-	UNIQUE_FUNC(loop)();
-#else
 	UNIQUE_FUNC(loop)(ctx);
+#else
+	UNIQUE_FUNC(loop)();
 #endif
 	return 0;
 }

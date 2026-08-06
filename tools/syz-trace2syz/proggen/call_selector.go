@@ -15,6 +15,7 @@ import (
 
 var discriminatorArgs = map[string][]int{
 	"bpf":         {0},
+	"epoll_ctl":   {1},
 	"fcntl":       {1},
 	"ioprio_get":  {0},
 	"keyctl":      {0},

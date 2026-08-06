@@ -145,6 +145,18 @@ func TestSanitizeProgramOpenAndPwrite(t *testing.T) {
 	}
 }
 
+func TestSanitizeProgramSizesSequentialReadFixture(t *testing.T) {
+	p := deserializeTestProg(t, `
+r0 = openat(0xffffffffffffff9c, &(0x7f0000000000)='/etc/localtime\x00', 0x0, 0x0)
+read(r0, &(0x7f0000000040)=""/4096, 0x1000)
+lseek(r0, 0xfffffffffffffeaa, 0x1)
+`)
+	_, _, filesizes, _, _, _ := sanitizeProgram(p, "test.prog")
+	if got := filesizes[0]; got < 0x1000 {
+		t.Fatalf("fixture size = %#x, want at least %#x", got, 0x1000)
+	}
+}
+
 func TestSanitizeMaxWriteSizeNullBuffer(t *testing.T) {
 	p := deserializeTestProg(t, `
 write(0xffffffffffffffff, 0x0, 0x20)
@@ -201,6 +213,37 @@ r0 = openat(0xffffffffffffff9c, &(0x7f0000000000)='/tmp/file\x00', 0x0, 0x0)
 	}
 	if subdirs["./tmp/file"] {
 		t.Fatalf("file path was registered as a directory: %v", subdirs)
+	}
+}
+
+func TestSanitizeProgramUsesFirstPathType(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := target.ConstMap["O_DIRECTORY"]
+	for _, test := range []struct {
+		name      string
+		firstFlag uint64
+		wantDir   bool
+	}{
+		{"directory first", directory, true},
+		{"file first", 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := deserializeTestProg(t, fmt.Sprintf(`
+r0 = openat(0xffffffffffffff9c, &(0x7f0000000000)='/tmp/same\x00', 0x%x, 0x0)
+r1 = openat(0xffffffffffffff9c, &(0x7f0000000040)='/tmp/same\x00', 0x%x, 0x0)
+`, test.firstFlag, directory-test.firstFlag))
+			_, subdirs, _, filemap, _, _ := sanitizeProgram(p, "test.prog")
+			gotFile := false
+			for _, path := range filemap {
+				gotFile = gotFile || path == "./tmp/same"
+			}
+			if subdirs["./tmp/same"] != test.wantDir || gotFile == test.wantDir {
+				t.Fatalf("subdirs=%v filemap=%v, want directory=%v", subdirs, filemap, test.wantDir)
+			}
+		})
 	}
 }
 

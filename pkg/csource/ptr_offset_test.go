@@ -37,7 +37,7 @@ func TestValInMMapRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := &context{target: target, sysTarget: targets.Get(target.OS, target.Arch)}
+	ctx := &context{opts: Options{CSB: true}, target: target, sysTarget: targets.Get(target.OS, target.Arch)}
 	min := target.DataOffset
 	max := min + target.NumPages*target.PageSize
 	tests := []struct {
@@ -47,8 +47,8 @@ func TestValInMMapRange(t *testing.T) {
 		{min - 1, false}, {min, true}, {max - 1, true}, {max, false}, {max + 0x1000, false},
 	}
 	for _, test := range tests {
-		if got := valInMMapRange(ctx, test.value); got != test.want {
-			t.Errorf("valInMMapRange(%#x)=%v, want %v", test.value, got, test.want)
+		if got := ctx.sourceDialect().pointerOffset(test.value) != ""; got != test.want {
+			t.Errorf("pointerOffset(%#x) present=%v, want %v", test.value, got, test.want)
 		}
 	}
 }
@@ -70,7 +70,7 @@ func TestDataMmapProgOffsetsGuards(t *testing.T) {
 	ctx := &context{p: p, target: target, sysTarget: targets.Get(target.OS, target.Arch), opts: Options{CSB: true}}
 	var calls strings.Builder
 	for _, call := range decoded.Calls {
-		calls.WriteString(ctx.fmtCallBody(call, false, 0, -1, false, false, false, true))
+		calls.WriteString(ctx.fmtCallBody(call, false, 0, -1, false, true))
 	}
 	if got := strings.Count(calls.String(), "+PTR_OFFSET"); got != 3 {
 		t.Fatalf("data mmap and guards are not all relocated: %d offsets", got)
@@ -122,10 +122,32 @@ func TestPtrOffsetUsesPointerEncoding(t *testing.T) {
 
 	meta := target.SyscallMap["close"]
 	for _, arg := range []prog.ExecArgConst{{Size: 8, Value: addr}, {IsPointer: true, Size: 8, Value: addr}} {
-		got := ctx.fmtCallBody(prog.ExecCall{Meta: meta, Args: []prog.ExecArg{arg}},
-			false, 0, -1, false, false, false, false)
+		got := ctx.fmtCallBody(prog.ExecCall{Meta: meta, Args: []prog.ExecArg{arg}}, false, 0, -1, false, false)
 		if strings.Contains(got, "+PTR_OFFSET") != arg.IsPointer {
 			t.Fatalf("direct argument relocation does not match pointer encoding: %s", got)
 		}
+	}
+}
+
+func TestSourceDialectBoundary(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newContext := func(csb bool) *context {
+		return &context{opts: Options{CSB: csb}, target: target,
+			sysTarget: targets.Get(target.OS, target.Arch)}
+	}
+	if got := newContext(false).sourceDialect().pseudoCallName("syz_csb_exit"); got != "syz_csb_exit" {
+		t.Fatalf("upstream dialect rewrote helper name to %q", got)
+	}
+	if got := newContext(true).sourceDialect().pseudoCallName("syz_csb_exit"); got != "UNIQUE_FUNC(syz_csb_exit)" {
+		t.Fatalf("CSB dialect helper name is not namespaced: %q", got)
+	}
+	if got := newContext(false).sourceDialect().pointerOffset(target.DataOffset); got != "" {
+		t.Fatalf("upstream dialect relocated an address: %q", got)
+	}
+	if got := newContext(true).sourceDialect().pointerOffset(target.DataOffset); got != "+PTR_OFFSET" {
+		t.Fatalf("CSB dialect did not relocate an address: %q", got)
 	}
 }

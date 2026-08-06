@@ -138,6 +138,13 @@ type openFlagConsts struct {
 	HasDirectory bool
 }
 
+type pathKind uint8
+
+const (
+	pathFile pathKind = iota
+	pathDirectory
+)
+
 // targetOpenFlagConsts avoids applying host or amd64 flag values to cross-architecture programs.
 func targetOpenFlagConsts(target *prog.Target) openFlagConsts {
 	directory, hasDirectory := target.ConstMap["O_DIRECTORY"]
@@ -250,6 +257,43 @@ func sanitizePread64(call *prog.Call, filesizes map[uint64](uint64)) map[uint64]
 	return filesizes
 }
 
+func resourceNumber(arg prog.Arg) uint64 {
+	resource := arg.(*prog.ResultArg)
+	for resource.Res != nil {
+		resource = resource.Res
+	}
+	return resource.Val
+}
+
+func sanitizeSequentialRead(call *prog.Call, filesizes, offsets map[uint64]uint64) {
+	resource := resourceNumber(call.Args[0])
+	count := call.Args[2].(*prog.ConstArg).Val
+	offsets[resource] += count
+	if offsets[resource] > filesizes[resource] {
+		filesizes[resource] = offsets[resource]
+	}
+}
+
+func sanitizeLseek(call *prog.Call, target *prog.Target, filesizes, offsets map[uint64]uint64) {
+	resource := resourceNumber(call.Args[0])
+	delta := int64(call.Args[1].(*prog.ConstArg).Val)
+	whence := call.Args[2].(*prog.ConstArg).Val
+	switch whence {
+	case target.ConstMap["SEEK_SET"]:
+		if delta >= 0 {
+			offsets[resource] = uint64(delta)
+		}
+	case target.ConstMap["SEEK_CUR"]:
+		current := int64(offsets[resource])
+		if current+delta >= 0 {
+			offsets[resource] = uint64(current + delta)
+		}
+	}
+	if offsets[resource] > filesizes[resource] {
+		filesizes[resource] = offsets[resource]
+	}
+}
+
 func sanitizeFallocate(call *prog.Call, filesizes map[uint64](uint64)) map[uint64](uint64) {
 	// Retrieve resource accessed
 	a0 := call.Args[0].(*prog.ResultArg)
@@ -348,19 +392,33 @@ func sanitizeConnect(call *prog.Call) {
 func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](bool), map[uint64](uint64), map[uint64](string), uint64, uint64) {
 	subdirs := make(map[string](bool))
 	filesizes := make(map[uint64](uint64))
+	offsets := make(map[uint64](uint64))
 	filemap := make(map[uint64](string))
 	maxWriteSize := uint64(0)
 	openFlags := targetOpenFlagConsts(p.Target)
+	initialPathKinds := make(map[string]pathKind)
 	for idx, call := range p.Calls {
 		p.AnnotateResources(idx)
 		switch call.Meta.Name {
 		case "openat":
 			subdirs, filemap = sanitizeOpenAt(call, openFlags, subdirs, filemap)
+			path := string(removeTrailingNullChars(call.Args[1].(*prog.PointerArg).Res.(*prog.DataArg).Data()))
+			if _, ok := initialPathKinds[path]; !ok {
+				kind := pathFile
+				if openFlags.HasDirectory && call.Args[2].(*prog.ConstArg).Val&openFlags.Directory != 0 {
+					kind = pathDirectory
+				}
+				initialPathKinds[path] = kind
+			}
 		case "pwrite64":
 			filesizes = sanitizePwrite64(call, filesizes)
 			maxWriteSize = sanitizeMaxWriteSize(call, 1, 2, maxWriteSize)
 		case "pread64":
 			filesizes = sanitizePread64(call, filesizes)
+		case "read":
+			sanitizeSequentialRead(call, filesizes, offsets)
+		case "lseek":
+			sanitizeLseek(call, p.Target, filesizes, offsets)
 		case "faccessat":
 			subdirPath := sanitizePathArg(call, 1)
 			subdirs[subdirPath] = true
@@ -394,6 +452,20 @@ func sanitizeProgram(p *prog.Prog, progName string) (*prog.Prog, map[string](boo
 			sanitizeSockaddrInArg(call, 1, syscall.AF_INET)
 		case "bind$inet6":
 			sanitizeSockaddrInArg(call, 1, syscall.AF_INET6)
+		}
+	}
+
+	// A path may change type during a trace. Initialize only its first observed
+	// type and let the retained syscalls perform later transitions.
+	for resource, path := range filemap {
+		if initialPathKinds[path] == pathDirectory {
+			delete(filemap, resource)
+			delete(filesizes, resource)
+		}
+	}
+	for path, kind := range initialPathKinds {
+		if kind == pathFile {
+			delete(subdirs, path)
 		}
 	}
 

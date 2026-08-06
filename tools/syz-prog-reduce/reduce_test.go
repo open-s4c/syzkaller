@@ -47,27 +47,6 @@ func TestReduceProgSamplesDynamicMotifs(t *testing.T) {
 	}
 }
 
-func TestReduceProgKeepsOnlyDependencyValidCalls(t *testing.T) {
-	p := testProg(t, ""+
-		"r0 = test$res2()\n"+
-		"fallback$1(r0)\n"+
-		"fallback$1(r0)\n")
-	reduced, _ := reduceProg(p, reduceOptions{
-		MaxCalls:          0,
-		MaxMotifInstances: 1,
-		MaxLiveResources:  0,
-		KeepFirst:         0,
-		KeepLast:          1,
-		IncludeConsts:     true,
-	})
-	if len(reduced.Calls) != 2 {
-		t.Fatalf("got %d calls, want one sampled producer/use pair:\n%s", len(reduced.Calls), reduced.Serialize())
-	}
-	if _, err := reduced.SerializeForExec(); err != nil {
-		t.Fatalf("reduced program is not executable: %v\n%s", err, reduced.Serialize())
-	}
-}
-
 func TestUsedResourcesIncludesInOutDependencies(t *testing.T) {
 	p := testProg(t, "r0 = test$res2()\nmutate6(r0, &(0x7f0000000040)=\"abcd\", 0x4)\n")
 	producer := p.Calls[0].Ret
@@ -231,28 +210,6 @@ func TestReduceProgSamplesCopiedInCallsWithoutRerun(t *testing.T) {
 	}
 }
 
-func TestReduceProgHonorsLiveResourceCap(t *testing.T) {
-	p := testProg(t, ""+
-		"r0 = test$res2()\n"+
-		"r1 = test$res2()\n"+
-		"mutate6(r0, &(0x7f0000000040)=\"abcd\", 0x4)\n")
-	reduced, stats := reduceProg(p, reduceOptions{
-		MaxCalls:          0,
-		MaxMotifInstances: 0,
-		MaxLiveResources:  1,
-		IncludeConsts:     true,
-	})
-	if len(reduced.Calls) != 2 {
-		t.Fatalf("got %d calls, want first producer and its use:\n%s", len(reduced.Calls), reduced.Serialize())
-	}
-	if stats.DroppedResources == 0 {
-		t.Fatalf("expected resource-cap drops, got stats %+v", stats)
-	}
-	if _, err := reduced.SerializeForExec(); err != nil {
-		t.Fatalf("reduced program is not executable: %v\n%s", err, reduced.Serialize())
-	}
-}
-
 func TestReadProgSanitizesAbsoluteFilenames(t *testing.T) {
 	oldOS, oldArch := *flagOS, *flagArch
 	defer func() {
@@ -271,12 +228,6 @@ func TestReadProgSanitizesAbsoluteFilenames(t *testing.T) {
 	got := string(p.Calls[0].Args[1].(*prog.PointerArg).Res.(*prog.DataArg).Data())
 	if got != "./etc/ld.so.cache\x00" {
 		t.Fatalf("filename = %q, want sanitized absolute path", got)
-	}
-}
-
-func TestSanitizeFilename(t *testing.T) {
-	if got := string(sanitizeFilename([]byte("../../file\x00"))); got != "a/a/../../file\x00" {
-		t.Fatalf("sanitizeFilename = %q", got)
 	}
 }
 

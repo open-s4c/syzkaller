@@ -89,6 +89,17 @@ func TestLinuxSyscalls(t *testing.T) {
 	}
 }
 
+func TestCSBPseudoSyscallsHaveLinuxChecks(t *testing.T) {
+	for _, name := range []string{
+		"syz_csb_thread_create_join",
+		"syz_reapply_affinity",
+	} {
+		if linuxSyscallChecks[name] == nil {
+			t.Errorf("missing Linux check for CSB pseudo-syscall %q", name)
+		}
+	}
+}
+
 func TestReadKVMInfo(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("not linux")

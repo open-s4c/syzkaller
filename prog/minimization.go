@@ -716,6 +716,17 @@ func ptrToBA[T any](p *T) []byte {
 	return []byte(fmt.Sprintf("%p", p))
 }
 
+func addFilenameDependencies(add func(any), filename string) {
+	for path := filename; path != ""; {
+		add(path)
+		slash := strings.LastIndexByte(path, '/')
+		if slash <= 0 || path[:slash] == "." {
+			return
+		}
+		path = path[:slash]
+	}
+}
+
 func usesRet(call *Call) map[any]bool {
 	var used map[any]bool
 	add := func(key any) {
@@ -740,7 +751,7 @@ func usesRet(call *Call) map[any]bool {
 				a := arg.(*DataArg)
 				if a.Dir() != DirOut && typ.Kind == BufferFilename {
 					val := string(bytes.TrimRight(a.Data(), "\x00"))
-					add(val)
+					addFilenameDependencies(add, val)
 				}
 			}
 		}
@@ -771,7 +782,7 @@ func uses(call *Call) map[any]bool {
 			a := arg.(*DataArg)
 			if a.Dir() != DirOut && typ.Kind == BufferFilename {
 				val := string(bytes.TrimRight(a.Data(), "\x00"))
-				add(val)
+				addFilenameDependencies(add, val)
 			}
 		}
 	})
