@@ -1149,6 +1149,10 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, initCall bool, ci int, force
 	}
 
 	for i, arg := range call.Args {
+		if timeout := ctx.boundedTimespecArg(callName, i); timeout != "" {
+			argsStrs = append(argsStrs, timeout)
+			continue
+		}
 		if ctx.opts.CSB {
 			switch i {
 			// argument index 0
@@ -1255,6 +1259,7 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, initCall bool, ci int, force
 			if dynamicFcntlCommand && i == 2 {
 				value = fmt.Sprintf("(csb_fcntl_cmd_%d == F_SETFL ? (%s | O_NONBLOCK) : %s)", ci, value, value)
 			}
+			value = ctx.boundWaitArg(callName, i, value)
 			argsStrs = append(argsStrs, ctx.protectCSBControlFD(callName, i, com+value))
 		case prog.ExecArgResult:
 			if initCall {
@@ -1280,6 +1285,7 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, initCall bool, ci int, force
 				// and take 2 slots without the cast, which would be wrong.
 				val = "(intptr_t)" + val
 			}
+			val = ctx.boundWaitArg(callName, i, val)
 			argsStrs = append(argsStrs, ctx.protectCSBControlFD(callName, i, com+val))
 		default:
 			panic(fmt.Sprintf("unknown arg type: %+v", arg))
@@ -1300,6 +1306,46 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, initCall bool, ci int, force
 			src, dst, funcName, strings.Join(argsStrs, ", "))
 	}
 	return fmt.Sprintf("%v(%v)", funcName, strings.Join(argsStrs, ", "))
+}
+
+func (ctx *context) boundedTimespecArg(callName string, arg int) string {
+	if !ctx.opts.CSB || ctx.target.OS != targets.Linux {
+		return ""
+	}
+	typeName := "csb_timespec"
+	switch callName {
+	case "ppoll":
+		if arg != 2 {
+			return ""
+		}
+	case "pselect6":
+		if arg != 4 {
+			return ""
+		}
+	case "ppoll_time64":
+		if arg != 2 {
+			return ""
+		}
+		typeName = "csb_timespec64"
+	case "pselect6_time64":
+		if arg != 4 {
+			return ""
+		}
+		typeName = "csb_timespec64"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("(struct %s[]){{CSB_MAX_WAIT_MS / 1000, "+
+		"(CSB_MAX_WAIT_MS %% 1000) * 1000000}}", typeName)
+}
+
+func (ctx *context) boundWaitArg(callName string, arg int, val string) string {
+	if !ctx.opts.CSB || !((callName == "poll" && arg == 2) ||
+		((callName == "epoll_wait" || callName == "epoll_pwait") && arg == 3)) {
+		return val
+	}
+	return fmt.Sprintf("((int32_t)(%[1]s) < 0 || (int32_t)(%[1]s) > CSB_MAX_WAIT_MS ? "+
+		"CSB_MAX_WAIT_MS : (%[1]s))", val)
 }
 
 func (ctx *context) protectCSBControlFD(callName string, arg int, val string) string {

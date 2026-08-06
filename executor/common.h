@@ -64,7 +64,24 @@ typedef signed int ssize_t;
 
 #if CSB
 #include <fcntl.h> /* Definition of AT_* constants */
+
+/*#ifndef*/ CSB_MAX_WAIT_MS
+#define CSB_MAX_WAIT_MS 1
+/*#endif*/
+
+struct csb_timespec {
+	long tv_sec;
+	long tv_nsec;
+};
+
+struct csb_timespec64 {
+	int64_t tv_sec;
+	int64_t tv_nsec;
+};
 #include <sys/stat.h>
+/*#ifndef*/ CSB_MAX_WAIT_MS
+#define CSB_MAX_WAIT_MS 1
+/*#endif*/
 // expect a
 // #define BM_THREAD_NUM <uint>
 // to have the number of threads for syz_thread or 1 otherwise
