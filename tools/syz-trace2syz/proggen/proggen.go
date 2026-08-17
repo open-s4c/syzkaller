@@ -24,13 +24,22 @@ func lineCounter(r io.Reader) (int, error) {
 	buf := make([]byte, 32*1024)
 	count := 0
 	lineSep := []byte{'\n'}
+	sawData := false
+	lastByte := byte('\n')
 
 	for {
 		c, err := r.Read(buf)
 		count += bytes.Count(buf[:c], lineSep)
+		if c != 0 {
+			sawData = true
+			lastByte = buf[c-1]
+		}
 
 		switch {
 		case err == io.EOF:
+			if sawData && lastByte != '\n' {
+				count++
+			}
 			return count, nil
 
 		case err != nil:
@@ -44,20 +53,22 @@ func ReadFile(filename string) ([]byte, int, error) {
 	var outBuffer []byte
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Fatal(err)
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("open trace: %w", err)
 	}
 	defer file.Close()
 
-	file.Seek(0, 0)
 	numLines, err := lineCounter(file)
 	curLine := 0
-	if err != nil || numLines < 1 {
-		log.Fatal(err)
-		return nil, 0, err
+	if err != nil {
+		return nil, 0, fmt.Errorf("count trace lines: %w", err)
+	}
+	if numLines == 0 {
+		return nil, 0, fmt.Errorf("trace file is empty")
 	}
 
-	file.Seek(0, 0)
+	if _, err := file.Seek(0, 0); err != nil {
+		return nil, 0, fmt.Errorf("rewind trace: %w", err)
+	}
 	scanner := bufio.NewScanner(file)
 	// maxCapacity := int(64 << 20)
 	// buf := make([]byte, maxCapacity)
@@ -76,8 +87,7 @@ func ReadFile(filename string) ([]byte, int, error) {
 	fmt.Fprintf(os.Stderr, "%s\r", strings.Repeat(" ", len(status)))
 
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("scan trace: %w", err)
 	}
 
 	return outBuffer, numLines, nil
