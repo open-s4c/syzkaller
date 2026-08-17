@@ -462,6 +462,21 @@ madvise(&(0x7f0000005000/0x100000)=nil, 0x100000, 0x0)[0]
 	}
 }
 
+func TestEpollCtlDelIgnoresEventPointer(t *testing.T) {
+	p := parseSingleProg(t, `
+epoll_create1(0) = 3
+epoll_ctl(3, 0x2, 4, 0xffffd6d16628) = 0
+`)
+	got := string(bytes.TrimSpace(p.Serialize()))
+	want := strings.TrimSpace(`
+r0 = epoll_create1(0x0)[3]
+epoll_ctl$EPOLL_CTL_DEL(r0, 0x2, 0x4)[0]
+`)
+	if got != want {
+		t.Fatalf("want:\n%v\n\ngot:\n%v", want, got)
+	}
+}
+
 func TestMadviseTraceToCSBHeader(t *testing.T) {
 	p := parseSingleProg(t, `
 madvise(0xffff7fb57000, 4096, 0x8) = 0
