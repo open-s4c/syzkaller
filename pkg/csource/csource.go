@@ -431,7 +431,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 	callComments []string, msgSizes []uint64, initIndices []int, dataMmap bool) ([]string, []uint64) {
 	var calls []string
 	csumSeq := 0
-	baseEmitOpts := emitCallOpts{localIO: localIOResources(p, ctx.target)}
+	baseEmitOpts := emitCallOpts{localIO: ctx.localIOResources(p)}
 	for ci, call := range p.Calls {
 		w := new(bytes.Buffer)
 		if addComments {
@@ -447,7 +447,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 		// Call itself.
 		resCopyout := call.Index != prog.ExecNoCopyout
 		argCopyout := len(call.Copyout) != 0
-		emitOpts := ctx.prepareEmitCall(w, &call, ci, baseEmitOpts, slices.Contains(initIndices, ci),
+		emitOpts := ctx.prepareEmitCall(&call, ci, baseEmitOpts, slices.Contains(initIndices, ci),
 			dataMmap, resCopyout)
 		ctx.emitPreparedCall(w, call, ci, resCopyout || argCopyout, trace, emitOpts)
 		if call.Props.Rerun > 0 {
@@ -456,7 +456,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 			ctx.emitCall(w, call, ci, false, false, emitOpts)
 			fmt.Fprintf(w, "\t}\n")
 		}
-		ctx.finishEmitCall(w, call)
+		ctx.finishEmitCall(w, emitOpts)
 		// Copyout.
 		if resCopyout || argCopyout {
 			ctx.copyout(w, call, ci, resCopyout, emitOpts)
@@ -552,7 +552,7 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, ci int, opts emitCallOpts) s
 			}
 			com := ctx.argComment(call.Meta.Args[i], arg)
 
-			value := ctx.formatCSBConstArg(call, arg, i, ci, opts,
+			value := ctx.formatCSBConstArg(arg, i, opts,
 				handleBigEndian(arg, ctx.constArgToStr(arg, native)))
 			argsStrs = append(argsStrs, ctx.protectCSBControlFD(callName, i, com+value))
 		case prog.ExecArgResult:
@@ -564,7 +564,7 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, ci int, opts emitCallOpts) s
 			}
 			com := ctx.argComment(call.Meta.Args[i], arg)
 			val := ctx.resultArgToStr(arg)
-			val = ctx.formatCSBResultArg(call, i, ci, opts, val)
+			val = ctx.formatCSBResultArg(i, opts, val)
 			if native && ctx.target.PtrSize == 4 {
 				// syscall accepts args as ellipsis, resources are uint64
 				// and take 2 slots without the cast, which would be wrong.
@@ -578,7 +578,7 @@ func (ctx *context) fmtCallBody(call prog.ExecCall, ci int, opts emitCallOpts) s
 	for i := 0; i < call.Meta.MissingArgs; i++ {
 		argsStrs = append(argsStrs, "0")
 	}
-	if body, ok := ctx.formatCSBCallBody(callName, funcName, argsStrs, native); ok {
+	if body, ok := ctx.formatCSBCallBody(callName, funcName, argsStrs, native, opts); ok {
 		return body
 	}
 	return fmt.Sprintf("%v(%v)", funcName, strings.Join(argsStrs, ", "))
@@ -711,7 +711,7 @@ func (ctx *context) copyout(w *bytes.Buffer, call prog.ExecCall, ci int, resCopy
 	}
 	fmt.Fprintf(w, "\n")
 	if resCopyout {
-		ctx.copyoutCSBResult(w, call, ci, opts)
+		ctx.copyoutCSBResult(w, call, opts)
 	}
 	for _, copyout := range call.Copyout {
 		PTR_OFFSET_STR_ADDR := ctx.sourceDialect().pointerOffset(copyout.Addr)

@@ -13,14 +13,51 @@ import (
 )
 
 type emitCallOpts struct {
-	initCall            bool
-	forceNonblockArg    int
-	dynamicFcntlCommand bool
-	csbFIONBIO          bool
-	csbMQAttr           bool
-	dataMmap            bool
-	localIO             map[uint64]bool
-	closeUnusedFD       bool
+	initCall      bool
+	dataMmap      bool
+	localIO       map[uint64]bool
+	captureResult bool
+	hooks         emitCallHooks
+}
+
+type formatArgHook func(index int, value string) string
+
+// emitCallHooks keeps syscall-specific CSB source generation next to the code
+// that recognizes the syscall. Argument hooks decorate the generically rendered
+// value. Call-body and result-copyout hooks replace their respective defaults.
+// afterEmit runs after the primary call; finishEmit runs after any rerun loop.
+type emitCallHooks struct {
+	beforeEmit      func(*bytes.Buffer)
+	afterEmit       func(*bytes.Buffer)
+	finishEmit      func(*bytes.Buffer)
+	formatConstArg  formatArgHook
+	formatResultArg formatArgHook
+	formatCallBody  func(callName, funcName string, args []string, native bool) (string, bool)
+	copyoutResult   func(*bytes.Buffer)
+}
+
+func replaceArgAt(target int, replacement string) formatArgHook {
+	return func(index int, value string) string {
+		if index == target {
+			return replacement
+		}
+		return value
+	}
+}
+
+func sprintfValueArgAt(target int, format string) formatArgHook {
+	return func(index int, value string) string {
+		if index == target {
+			return fmt.Sprintf(format, value)
+		}
+		return value
+	}
+}
+
+func assertHookUnset(installer, hook string, installed bool) {
+	if installed {
+		panic(fmt.Sprintf("%s: %s hook is already installed", installer, hook))
+	}
 }
 
 func csbMessageSizes(p *prog.Prog) []uint64 {
@@ -58,20 +95,20 @@ func csbMessageSizes(p *prog.Prog) []uint64 {
 	return sizes
 }
 
-func (ctx *context) prepareEmitCall(w *bytes.Buffer, call *prog.ExecCall, ci int,
-	opts emitCallOpts, initCall, dataMmap, resCopyout bool) emitCallOpts {
+func (ctx *context) prepareEmitCall(call *prog.ExecCall, ci int, opts emitCallOpts,
+	initCall, dataMmap, resCopyout bool) emitCallOpts {
 	opts.initCall = initCall
-	opts.forceNonblockArg = -1
 	opts.dataMmap = dataMmap
 	if !ctx.opts.CSB {
 		return opts
 	}
-	opts.closeUnusedFD = !resCopyout && returnsFD(call.Meta)
-	ctx.prepareFIONBIO(w, *call, ci, &opts)
-	ctx.prepareOpenat2(w, *call, ci)
-	ctx.prepareFcntl(call, ci, w, &opts)
-	ctx.prepareMQAttr(w, *call, ci, &opts)
+	ctx.prepareUnusedFD(call.Meta, resCopyout, &opts)
+	ctx.prepareFIONBIO(*call, ci, &opts)
+	ctx.prepareFcntl(call, ci, &opts)
+	ctx.prepareMQAttr(*call, ci, &opts)
 	ctx.prepareNonblockingOpen(call, &opts)
+	ctx.prepareOpenat2(*call, ci, &opts)
+	ctx.prepareDup(*call, &opts)
 	return opts
 }
 
@@ -83,9 +120,12 @@ func returnsFD(call *prog.Syscall) bool {
 
 func (ctx *context) emitPreparedCall(w *bytes.Buffer, call prog.ExecCall, ci int,
 	haveCopyout, trace bool, opts emitCallOpts) {
-	ctx.emitCall(w, call, ci, haveCopyout || opts.closeUnusedFD, trace, opts)
-	if opts.closeUnusedFD {
-		fmt.Fprintf(w, "\tif (res > 2) close((int)res);\n")
+	if opts.hooks.beforeEmit != nil {
+		opts.hooks.beforeEmit(w)
+	}
+	ctx.emitCall(w, call, ci, haveCopyout || opts.captureResult, trace, opts)
+	if opts.hooks.afterEmit != nil {
+		opts.hooks.afterEmit(w)
 	}
 }
 
@@ -94,52 +134,103 @@ func (ctx *context) copyoutMultiple(call prog.ExecCall, resCopyout bool, opts em
 		resCopyout && ctx.opts.CSB && ctx.target.OS == targets.Linux && opts.localIO[call.Index]
 }
 
-func (ctx *context) prepareFIONBIO(w *bytes.Buffer, call prog.ExecCall, ci int, opts *emitCallOpts) {
-	if call.Meta.CallName != "ioctl" || len(call.Args) <= 2 || !localIOArg(call, opts.localIO) {
+func (*context) prepareUnusedFD(call *prog.Syscall, resCopyout bool, opts *emitCallOpts) {
+	if resCopyout || !returnsFD(call) {
+		return
+	}
+	assertHookUnset("prepareUnusedFD", "afterEmit", opts.hooks.afterEmit != nil)
+	opts.captureResult = true
+	opts.hooks.afterEmit = func(w *bytes.Buffer) {
+		fmt.Fprintf(w, "\tif (res > 2) close((int)res);\n")
+	}
+}
+
+func (ctx *context) prepareFIONBIO(call prog.ExecCall, ci int, opts *emitCallOpts) {
+	if call.Meta.CallName != "ioctl" || len(call.Args) <= 2 {
 		return
 	}
 	cmd, cmdOK := call.Args[1].(prog.ExecArgConst)
 	value, valueOK := call.Args[2].(prog.ExecArgConst)
-	if cmdOK && valueOK && cmd.Value == ctx.target.ConstMap["FIONBIO"] && valInMMapRange(ctx, value.Value) {
-		opts.csbFIONBIO = true
-		fmt.Fprintf(w, "\tuint32 csb_fionbio_%d = 1;\n", ci)
-	}
-}
-
-func (ctx *context) prepareOpenat2(w *bytes.Buffer, call prog.ExecCall, ci int) {
-	if call.Meta.CallName != "openat2" {
+	relocatePointer := valueOK && call.Meta.Name == "ioctl$auto_FIONBIO" &&
+		valInMMapRange(ctx, value.Value)
+	replacePointer := localIOArg(call, opts.localIO) && cmdOK && valueOK &&
+		cmd.Value == ctx.target.ConstMap["FIONBIO"] && valInMMapRange(ctx, value.Value)
+	if !relocatePointer && !replacePointer {
 		return
 	}
-	how, known := ctx.openat2How(ci)
-	if known && how[0]&ctx.target.ConstMap["O_PATH"] == 0 {
-		how[0] |= ctx.target.ConstMap["O_NONBLOCK"]
+	assertHookUnset("prepareFIONBIO", "formatConstArg", opts.hooks.formatConstArg != nil)
+	if replacePointer {
+		assertHookUnset("prepareFIONBIO", "beforeEmit", opts.hooks.beforeEmit != nil)
+		opts.hooks.beforeEmit = func(w *bytes.Buffer) {
+			fmt.Fprintf(w, "\tuint32 csb_fionbio_%d = 1;\n", ci)
+		}
+		opts.hooks.formatConstArg = replaceArgAt(2,
+			fmt.Sprintf("(intptr_t)&csb_fionbio_%d", ci))
+		return
 	}
-	fmt.Fprintf(w, "\t{\n\tstruct { uint64 flags; uint64 mode; uint64 resolve; } "+
-		"csb_open_how_%[1]d = {%[2]d, %[3]d, %[4]d};\n", ci, how[0], how[1], how[2])
+	if relocatePointer {
+		opts.hooks.formatConstArg = sprintfValueArgAt(2, "%s+PTR_OFFSET")
+	}
 }
 
-func (ctx *context) prepareFcntl(call *prog.ExecCall, ci int, w *bytes.Buffer, opts *emitCallOpts) {
-	if fcntlCommand(*call, ctx.target.ConstMap["F_SETFL"]) && localIOArg(*call, opts.localIO) {
+func (ctx *context) prepareFcntl(call *prog.ExecCall, ci int, opts *emitCallOpts) {
+	if call.Meta.CallName != "fcntl" || len(call.Args) <= 1 || !localIOArg(*call, opts.localIO) {
+		return
+	}
+	setFlags := ctx.fcntlCommand(*call, "F_SETFL")
+	command, dynamic := call.Args[1].(prog.ExecArgResult)
+	if !setFlags && !dynamic {
+		return
+	}
+	assertHookUnset("prepareFcntl", "beforeEmit", opts.hooks.beforeEmit != nil)
+	assertHookUnset("prepareFcntl", "formatConstArg", opts.hooks.formatConstArg != nil)
+	assertHookUnset("prepareFcntl", "formatResultArg", opts.hooks.formatResultArg != nil)
+	assertHookUnset("prepareFcntl", "copyoutResult", opts.hooks.copyoutResult != nil)
+	if setFlags {
 		args := append([]prog.ExecArg(nil), call.Args...)
 		if flags, ok := args[2].(prog.ExecArgConst); ok {
 			flags.Value |= ctx.target.ConstMap["O_NONBLOCK"]
 			args[2] = flags
 			call.Args = args
 		} else if _, ok := args[2].(prog.ExecArgResult); ok {
-			opts.forceNonblockArg = 2
+			opts.hooks.formatResultArg = sprintfValueArgAt(2, "(%s | O_NONBLOCK)")
 		}
 	}
-	if call.Meta.CallName != "fcntl" || len(call.Args) <= 1 || !localIOArg(*call, opts.localIO) {
+	if !dynamic {
 		return
 	}
-	command, dynamic := call.Args[1].(prog.ExecArgResult)
-	if dynamic {
-		opts.dynamicFcntlCommand = true
-		fmt.Fprintf(w, "\tintptr_t csb_fcntl_cmd_%d = %s;\n", ci, ctx.resultArgToStr(command))
+	commandName := fmt.Sprintf("csb_fcntl_cmd_%d", ci)
+	opts.hooks.beforeEmit = func(w *bytes.Buffer) {
+		fmt.Fprintf(w, "\tintptr_t %s = %s;\n", commandName, ctx.resultArgToStr(command))
+	}
+	formatArg := func(index int, value string) string {
+		switch index {
+		case 1:
+			return commandName
+		case 2:
+			return fmt.Sprintf("(%s == F_SETFL ? (%s | O_NONBLOCK) : %s)",
+				commandName, value, value)
+		default:
+			return value
+		}
+	}
+	opts.hooks.formatConstArg = formatArg
+	opts.hooks.formatResultArg = formatArg
+	if opts.localIO[call.Index] {
+		resultIndex := call.Index
+		opts.hooks.copyoutResult = func(w *bytes.Buffer) {
+			fmt.Fprintf(w, "\t\tif (%[1]s == F_DUPFD || "+
+				"%[1]s == F_DUPFD_CLOEXEC) "+
+				"{ int flags = fcntl(res, F_GETFL); if (flags != -1) "+
+				"fcntl(res, F_SETFL, flags | O_NONBLOCK); }\n", commandName)
+			fmt.Fprintf(w, "\t\t%[1]v[%[2]v] = "+
+				"(%[3]s == F_DUPFD || %[3]s == F_DUPFD_CLOEXEC) ? res : -1;\n",
+				ctx.resultArrayName(), resultIndex, commandName)
+		}
 	}
 }
 
-func (ctx *context) prepareMQAttr(w *bytes.Buffer, call prog.ExecCall, ci int, opts *emitCallOpts) {
+func (ctx *context) prepareMQAttr(call prog.ExecCall, ci int, opts *emitCallOpts) {
 	if call.Meta.CallName != "mq_getsetattr" || !localIOArg(call, opts.localIO) {
 		return
 	}
@@ -147,10 +238,15 @@ func (ctx *context) prepareMQAttr(w *bytes.Buffer, call prog.ExecCall, ci int, o
 	if !ok || !valInMMapRange(ctx, attr.Value) {
 		return
 	}
-	opts.csbMQAttr = true
-	fmt.Fprintf(w, "\tstruct { intptr_t flags; intptr_t maxmsg; intptr_t msgsize; intptr_t curmsgs; "+
-		"intptr_t reserved[4]; } csb_mq_attr_%[1]d = {%[2]d, 0, 0, 0};\n",
-		ci, ctx.target.ConstMap["O_NONBLOCK"])
+	assertHookUnset("prepareMQAttr", "beforeEmit", opts.hooks.beforeEmit != nil)
+	assertHookUnset("prepareMQAttr", "formatConstArg", opts.hooks.formatConstArg != nil)
+	opts.hooks.beforeEmit = func(w *bytes.Buffer) {
+		fmt.Fprintf(w, "\tstruct { intptr_t flags; intptr_t maxmsg; intptr_t msgsize; intptr_t curmsgs; "+
+			"intptr_t reserved[4]; } csb_mq_attr_%[1]d = {%[2]d, 0, 0, 0};\n",
+			ci, ctx.target.ConstMap["O_NONBLOCK"])
+	}
+	opts.hooks.formatConstArg = replaceArgAt(1,
+		fmt.Sprintf("(intptr_t)&csb_mq_attr_%d", ci))
 }
 
 func (ctx *context) prepareNonblockingOpen(call *prog.ExecCall, opts *emitCallOpts) {
@@ -187,13 +283,66 @@ func (ctx *context) prepareNonblockingOpen(call *prog.ExecCall, opts *emitCallOp
 		args[flagArg] = flags
 		call.Args = args
 	} else if _, ok := args[flagArg].(prog.ExecArgResult); ok {
-		opts.forceNonblockArg = flagArg
+		assertHookUnset("prepareNonblockingOpen", "formatResultArg", opts.hooks.formatResultArg != nil)
+		opts.hooks.formatResultArg = sprintfValueArgAt(flagArg, "(%s | O_NONBLOCK)")
 	}
 }
 
-func (ctx *context) finishEmitCall(w *bytes.Buffer, call prog.ExecCall) {
-	if ctx.opts.CSB && call.Meta.CallName == "openat2" {
+func (ctx *context) prepareOpenat2(call prog.ExecCall, ci int, opts *emitCallOpts) {
+	if call.Meta.CallName != "openat2" {
+		return
+	}
+	assertHookUnset("prepareOpenat2", "beforeEmit", opts.hooks.beforeEmit != nil)
+	assertHookUnset("prepareOpenat2", "finishEmit", opts.hooks.finishEmit != nil)
+	assertHookUnset("prepareOpenat2", "formatConstArg", opts.hooks.formatConstArg != nil)
+	assertHookUnset("prepareOpenat2", "formatResultArg", opts.hooks.formatResultArg != nil)
+	how, known := ctx.openat2How(ci)
+	if known && how[0]&ctx.target.ConstMap["O_PATH"] == 0 {
+		how[0] |= ctx.target.ConstMap["O_NONBLOCK"]
+	}
+	opts.hooks.beforeEmit = func(w *bytes.Buffer) {
+		fmt.Fprintf(w, "\t{\n\tstruct { uint64 flags; uint64 mode; uint64 resolve; } "+
+			"csb_open_how_%[1]d = {%[2]d, %[3]d, %[4]d};\n", ci, how[0], how[1], how[2])
+	}
+	formatArg := func(index int, value string) string {
+		switch index {
+		case 2:
+			return fmt.Sprintf("(intptr_t)&csb_open_how_%d", ci)
+		case 3:
+			return fmt.Sprintf("sizeof(csb_open_how_%d)", ci)
+		default:
+			return value
+		}
+	}
+	opts.hooks.formatConstArg = formatArg
+	opts.hooks.formatResultArg = formatArg
+	opts.hooks.finishEmit = func(w *bytes.Buffer) {
 		fmt.Fprintf(w, "\t}\n")
+	}
+}
+
+func (*context) prepareDup(call prog.ExecCall, opts *emitCallOpts) {
+	if call.Meta.CallName != "dup2" && call.Meta.CallName != "dup3" {
+		return
+	}
+	assertHookUnset("prepareDup", "formatCallBody", opts.hooks.formatCallBody != nil)
+	opts.hooks.formatCallBody = func(_ string, funcName string, args []string, native bool) (string, bool) {
+		argOffset := 0
+		if native {
+			argOffset = 1
+		}
+		src, dst := args[argOffset], args[argOffset+1]
+		args[argOffset] = "csb_dup_src"
+		args[argOffset+1] =
+			"((uint32)csb_dup_dst <= 2 && (uint32)csb_dup_src != (uint32)csb_dup_dst ? -1 : csb_dup_dst)"
+		return fmt.Sprintf("({ intptr_t csb_dup_src = (%s); intptr_t csb_dup_dst = (%s); %v(%v); })",
+			src, dst, funcName, strings.Join(args, ", ")), true
+	}
+}
+
+func (*context) finishEmitCall(w *bytes.Buffer, opts emitCallOpts) {
+	if opts.hooks.finishEmit != nil {
+		opts.hooks.finishEmit(w)
 	}
 }
 
@@ -212,7 +361,7 @@ func finishCSBCalls() {
 	NetOpsFDsAccept = acceptOps
 }
 
-func localIOResources(p prog.ExecProg, target *prog.Target) map[uint64]bool {
+func (ctx *context) localIOResources(p prog.ExecProg) map[uint64]bool {
 	local := make(map[uint64]bool)
 	for _, call := range p.Calls {
 		switch call.Meta.CallName {
@@ -229,8 +378,8 @@ func localIOResources(p prog.ExecProg, target *prog.Target) map[uint64]bool {
 				local[call.Index] = true
 			}
 		case "fcntl":
-			duplicate := fcntlCommand(call, target.ConstMap["F_DUPFD"]) ||
-				fcntlCommand(call, target.ConstMap["F_DUPFD_CLOEXEC"])
+			duplicate := ctx.fcntlCommand(call, "F_DUPFD") ||
+				ctx.fcntlCommand(call, "F_DUPFD_CLOEXEC")
 			if _, dynamic := call.Args[1].(prog.ExecArgResult); dynamic {
 				// A dynamic command may duplicate a local descriptor at runtime.
 				duplicate = true
@@ -244,12 +393,16 @@ func localIOResources(p prog.ExecProg, target *prog.Target) map[uint64]bool {
 	return local
 }
 
-func fcntlCommand(call prog.ExecCall, command uint64) bool {
+func (ctx *context) fcntlCommand(call prog.ExecCall, commandName string) bool {
 	if call.Meta.CallName != "fcntl" || len(call.Args) < 2 {
 		return false
 	}
+	commandValue, ok := ctx.target.ConstMap[commandName]
+	if !ok {
+		return false
+	}
 	arg, ok := call.Args[1].(prog.ExecArgConst)
-	return ok && arg.Value == command
+	return ok && arg.Value == commandValue
 }
 
 func localIOArg(call prog.ExecCall, local map[uint64]bool) bool {
@@ -268,76 +421,46 @@ func valInMMapRange(ctx *context, val uint64) bool {
 	return val >= min && val < max
 }
 
-func (ctx *context) formatCSBConstArg(call prog.ExecCall, arg prog.ExecArgConst, i, ci int,
+func (ctx *context) formatCSBConstArg(arg prog.ExecArgConst, i int,
 	opts emitCallOpts, value string) string {
 	// DataMmapProg includes adjacent guard pages that move with the mapping.
 	if ctx.opts.CSB && ((opts.dataMmap && i == 0) ||
-		(call.Meta.Name == "ioctl$auto_FIONBIO" && i == 2 && valInMMapRange(ctx, arg.Value)) ||
 		(arg.IsPointer && valInMMapRange(ctx, arg.Value))) {
 		value += "+PTR_OFFSET"
 	}
-	value = ctx.rewriteCSBOpenat2Arg(call, i, ci, value)
-	if opts.csbFIONBIO && i == 2 {
-		value = fmt.Sprintf("(intptr_t)&csb_fionbio_%d", ci)
-	}
-	if opts.csbMQAttr && i == 1 {
-		value = fmt.Sprintf("(intptr_t)&csb_mq_attr_%d", ci)
-	}
-	if opts.dynamicFcntlCommand && i == 2 {
-		value = fmt.Sprintf("(csb_fcntl_cmd_%d == F_SETFL ? (%s | O_NONBLOCK) : %s)", ci, value, value)
+	if opts.hooks.formatConstArg != nil {
+		value = opts.hooks.formatConstArg(i, value)
 	}
 	return value
 }
 
-func (ctx *context) formatCSBResultArg(call prog.ExecCall, i, ci int, opts emitCallOpts, value string) string {
-	if opts.dynamicFcntlCommand && i == 1 {
-		value = fmt.Sprintf("csb_fcntl_cmd_%d", ci)
+func (*context) formatCSBResultArg(i int, opts emitCallOpts, value string) string {
+	if opts.hooks.formatResultArg != nil {
+		value = opts.hooks.formatResultArg(i, value)
 	}
-	if opts.dynamicFcntlCommand && i == 2 {
-		value = fmt.Sprintf("(csb_fcntl_cmd_%d == F_SETFL ? (%s | O_NONBLOCK) : %s)", ci, value, value)
-	}
-	if opts.forceNonblockArg == i {
-		value = fmt.Sprintf("(%s | O_NONBLOCK)", value)
-	}
-	return ctx.rewriteCSBOpenat2Arg(call, i, ci, value)
+	return value
 }
 
-func (ctx *context) formatCSBCallBody(callName, funcName string, args []string, native bool) (string, bool) {
-	if !ctx.opts.CSB || callName != "dup2" && callName != "dup3" {
-		return "", false
+func (*context) formatCSBCallBody(callName, funcName string, args []string, native bool,
+	opts emitCallOpts) (string, bool) {
+	if opts.hooks.formatCallBody != nil {
+		return opts.hooks.formatCallBody(callName, funcName, args, native)
 	}
-	argOffset := 0
-	if native {
-		argOffset = 1
-	}
-	src, dst := args[argOffset], args[argOffset+1]
-	args[argOffset] = "csb_dup_src"
-	args[argOffset+1] = "((uint32)csb_dup_dst <= 2 && (uint32)csb_dup_src != (uint32)csb_dup_dst ? -1 : csb_dup_dst)"
-	return fmt.Sprintf("({ intptr_t csb_dup_src = (%s); intptr_t csb_dup_dst = (%s); %v(%v); })",
-		src, dst, funcName, strings.Join(args, ", ")), true
+	return "", false
 }
 
-func (ctx *context) copyoutCSBResult(w *bytes.Buffer, call prog.ExecCall, ci int, opts emitCallOpts) {
+func (ctx *context) copyoutCSBResult(w *bytes.Buffer, call prog.ExecCall, opts emitCallOpts) {
 	initFDs[call.Index] = true
+	if opts.hooks.copyoutResult != nil {
+		opts.hooks.copyoutResult(w)
+		return
+	}
 	if ctx.opts.CSB && ctx.target.OS == targets.Linux && opts.localIO[call.Index] {
 		// Set nonblocking mode before publishing the descriptor to concurrent calls.
-		if opts.dynamicFcntlCommand {
-			fmt.Fprintf(w, "\t\tif (csb_fcntl_cmd_%[1]d == F_DUPFD || "+
-				"csb_fcntl_cmd_%[1]d == F_DUPFD_CLOEXEC) "+
-				"{ int flags = fcntl(res, F_GETFL); if (flags != -1) "+
-				"fcntl(res, F_SETFL, flags | O_NONBLOCK); }\n", ci)
-		} else {
-			fmt.Fprintf(w, "\t\t{ int flags = fcntl(res, F_GETFL); "+
-				"if (flags != -1) fcntl(res, F_SETFL, flags | O_NONBLOCK); }\n")
-		}
+		fmt.Fprintf(w, "\t\t{ int flags = fcntl(res, F_GETFL); "+
+			"if (flags != -1) fcntl(res, F_SETFL, flags | O_NONBLOCK); }\n")
 	}
-	if opts.dynamicFcntlCommand && opts.localIO[call.Index] {
-		fmt.Fprintf(w, "\t\t%[1]v[%[2]v] = "+
-			"(csb_fcntl_cmd_%[3]d == F_DUPFD || csb_fcntl_cmd_%[3]d == F_DUPFD_CLOEXEC) ? res : -1;\n",
-			ctx.resultArrayName(), call.Index, ci)
-	} else {
-		fmt.Fprintf(w, "\t\t%v[%v] = res;\n", ctx.resultArrayName(), call.Index)
-	}
+	fmt.Fprintf(w, "\t\t%v[%v] = res;\n", ctx.resultArrayName(), call.Index)
 }
 
 func (ctx *context) copyoutCSBArg(w *bytes.Buffer, copyout prog.ExecCopyout, value string,
@@ -424,20 +547,6 @@ func (ctx *context) openat2How(ci int) ([3]uint64, bool) {
 		values[i] = field.Val
 	}
 	return values, true
-}
-
-func (ctx *context) rewriteCSBOpenat2Arg(call prog.ExecCall, argIndex, callIndex int, value string) string {
-	if !ctx.opts.CSB || call.Meta.CallName != "openat2" {
-		return value
-	}
-	switch argIndex {
-	case 2:
-		return fmt.Sprintf("(intptr_t)&csb_open_how_%d", callIndex)
-	case 3:
-		return fmt.Sprintf("sizeof(csb_open_how_%d)", callIndex)
-	default:
-		return value
-	}
 }
 
 func (ctx *context) protectCSBControlFD(callName string, arg int, val string) string {
